@@ -1,14 +1,16 @@
 
 package org.bonej.ops;
 
-import net.imagej.ops.AbstractOp;
+import java.util.Random;
+
 import net.imagej.ops.Op;
+import net.imagej.ops.special.function.AbstractBinaryFunctionOp;
 import net.imglib2.RandomAccessibleInterval;
 import net.imglib2.type.BooleanType;
 
-import org.scijava.ItemIO;
-import org.scijava.plugin.Parameter;
 import org.scijava.plugin.Plugin;
+import org.scijava.vecmath.AxisAngle4d;
+import org.scijava.vecmath.Quat4d;
 import org.scijava.vecmath.Vector3d;
 
 /**
@@ -16,28 +18,54 @@ import org.scijava.vecmath.Vector3d;
  */
 @Plugin(type = Op.class)
 public class CountInterfaces<B extends BooleanType<B>> extends
-        AbstractOp
+	AbstractBinaryFunctionOp<RandomAccessibleInterval<B>, Long, Long>
 {
-    @Parameter
-    private RandomAccessibleInterval<B> interval;
 
-    @Parameter
-    private Vector3d centroid;
+	private static final Random random = new Random(System.currentTimeMillis());
 
-    @Parameter
-    private Double radius;
+	@Override
+	public Long calculate(final RandomAccessibleInterval<B> interval,
+		final Long samples)
+	{
+		final Vector3d centrePoint = findCentrePoint(interval);
+		final double angle = random.nextDouble() * Math.PI;
+		rotate(new Vector3d(1.0, 0.0, 0.0), centrePoint, angle);
+		return 0L;
+	}
 
-    @Parameter(required = false)
-    private Long nVectors = 50_000L;
+	private static <B extends BooleanType<B>> Vector3d findCentrePoint(
+		final RandomAccessibleInterval<B> interval)
+	{
+		final int n = interval.numDimensions();
+		final long[] mins = new long[n];
+		interval.min(mins);
+		final long[] maxs = new long[n];
+		interval.max(maxs);
+		final double[] coordinates = new double[3];
+		final int copy = n > 2 ? 3 : 2;
+		for (int i = 0; i < copy; i++) {
+			coordinates[i] = maxs[i] - mins[i];
+		}
+		return new Vector3d(coordinates);
+	}
 
-    @Parameter(required = false, description = "Number of samples taken along the radius")
-    private Long samples = 2L;
+	public static Vector3d rotate(Vector3d v, Vector3d centrePoint,
+		double angle)
+	{
+		final AxisAngle4d axisAngle4d = new AxisAngle4d(centrePoint, angle);
+		final Quat4d q = new Quat4d();
+		q.set(axisAngle4d);
+		final Quat4d p = new Quat4d(v.x, v.y, v.z, 0.0);
+		final Quat4d rotated = new Quat4d();
+		q.mul(p, rotated);
+		rotated.mulInverse(q);
+		return new Vector3d(rotated.x, rotated.y, rotated.z);
+	}
 
-    @Parameter(type = ItemIO.OUTPUT)
-    private Long interfaces;
-
-    @Override
-    public void run() {
-        interfaces = 0L;
-    }
+	public static void main(String... args) {
+		final Vector3d v = new Vector3d(1, 0, 0);
+		final Vector3d centre = new Vector3d(0, 0, 1);
+		final Vector3d u = CountInterfaces.rotate(v, centre, Math.PI / 2.0);
+		System.out.println(u.toString());
+	}
 }

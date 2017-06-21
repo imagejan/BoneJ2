@@ -29,7 +29,6 @@ public class CountInterfaces<B extends BooleanType<B>> extends
 	{
 		final Vector3d centrePoint = findCentrePoint(interval);
 		final double angle = random.nextDouble() * Math.PI;
-		rotate(new Vector3d(1.0, 0.0, 0.0), centrePoint, angle);
 		return 0L;
 	}
 
@@ -49,23 +48,26 @@ public class CountInterfaces<B extends BooleanType<B>> extends
 		return new Vector3d(coordinates);
 	}
 
-	public static Vector3d rotate(Vector3d v, Vector3d centrePoint,
-		double angle)
-	{
-		final AxisAngle4d axisAngle4d = new AxisAngle4d(centrePoint, angle);
+	/**
+	 * Rotates the given point around the axis by theta angle
+	 *
+	 * @implNote Uses quaternions
+	 * @param point A point in 3D space
+	 * @param axis  The axis of rotation
+	 * @param theta Angle of rotation in radians
+	 * @return The rotated point
+	 */
+	public static Vector3d rotate(final Vector3d point, final Vector3d axis, final double theta) {
+		final AxisAngle4d axisAngle4d = new AxisAngle4d(axis, theta);
 		final Quat4d q = new Quat4d();
 		q.set(axisAngle4d);
-		final Quat4d p = new Quat4d(v.x, v.y, v.z, 0.0);
+		final Quat4d p = new Quat4d();
+		p.set(point.x, point.y, point.z, 0.0);
+		final Quat4d qInv = new Quat4d();
+		qInv.inverse(q);
 		final Quat4d rotated = new Quat4d();
-		q.mul(p, rotated);
-		rotated.mulInverse(q);
+		rotated.mul(q, p);
+		rotated.mul(qInv);
 		return new Vector3d(rotated.x, rotated.y, rotated.z);
-	}
-
-	public static void main(String... args) {
-		final Vector3d v = new Vector3d(1, 0, 0);
-		final Vector3d centre = new Vector3d(0, 0, 1);
-		final Vector3d u = CountInterfaces.rotate(v, centre, Math.PI / 2.0);
-		System.out.println(u.toString());
 	}
 }

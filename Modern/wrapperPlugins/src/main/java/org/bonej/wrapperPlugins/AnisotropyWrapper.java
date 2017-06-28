@@ -8,18 +8,21 @@ import static org.bonej.wrapperPlugins.CommonMessages.NO_IMAGE_OPEN;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
-import java.util.function.Function;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
 import net.imagej.ImgPlus;
 import net.imagej.axis.Axes;
-import net.imagej.ops.OpCandidate;
+import net.imagej.axis.CalibratedAxis;
 import net.imagej.ops.OpService;
+import net.imagej.ops.special.function.BinaryFunctionOp;
+import net.imagej.ops.special.function.Functions;
+import net.imglib2.RandomAccessibleInterval;
 import net.imglib2.type.NativeType;
 import net.imglib2.type.logic.BitType;
 import net.imglib2.type.numeric.RealType;
 
+import org.bonej.ops.CountInterfaces;
 import org.bonej.utilities.AxisUtils;
 import org.bonej.utilities.ElementUtil;
 import org.bonej.wrapperPlugins.wrapperUtils.Common;
@@ -75,6 +78,8 @@ public class AnisotropyWrapper<T extends RealType<T> & NativeType<T>> extends
 	@Parameter
 	private OpService opService;
 
+	private BinaryFunctionOp<RandomAccessibleInterval<BitType>, Double, Long> intersectionsOp;
+
 	@Override
 	public void run() {
 		statusService.showStatus("Anisotropy: initialising");
@@ -83,14 +88,19 @@ public class AnisotropyWrapper<T extends RealType<T> & NativeType<T>> extends
 		final List<Subspace<BitType>> subspaces = HyperstackUtils.split3DSubspaces(
 			bitImgPlus).collect(Collectors.toList());
 		matchOps(subspaces.get(0));
+		subspaces.forEach(subspace -> {
+			final Long intersections = intersectionsOp.calculate(subspace.interval,
+				1.0);
+			System.out.println(intersections);
+		});
 	}
 
-    private void matchOps(final Subspace<BitType> bitTypeSubspace) {
-	    //new OpCandidate()
-        //opService.matcher().match()
-    }
+	private void matchOps(final Subspace<BitType> subspace) {
+		intersectionsOp = (BinaryFunctionOp) Functions.binary(opService,
+			CountInterfaces.class, Long.class, subspace.interval, Double.class);
+	}
 
-    @SuppressWarnings("unused")
+	@SuppressWarnings("unused")
 	private void validateImage() {
 		if (inputImage == null) {
 			cancel(NO_IMAGE_OPEN);
@@ -102,8 +112,8 @@ public class AnisotropyWrapper<T extends RealType<T> & NativeType<T>> extends
 			cancel(NOT_3D_IMAGE);
 		}
 		final int n = inputImage.numDimensions();
-		final int slices = IntStream.range(0, n).filter(i -> inputImage.axis(i)
-			.type() == Axes.Z).findFirst().orElse(-1);
+		final int zIndex = inputImage.dimensionIndex(Axes.Z);
+		final long slices = zIndex >= 0 ? inputImage.dimension(zIndex) : 0;
 		if (slices < 5) {
 			cancel("Stack with at least 5 slices required");
 		}

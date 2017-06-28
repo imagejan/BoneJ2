@@ -4,7 +4,9 @@ package org.bonej.ops;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Random;
+import java.util.function.Supplier;
 import java.util.stream.IntStream;
+import java.util.stream.Stream;
 
 import net.imagej.ops.Contingent;
 import net.imagej.ops.Op;
@@ -13,9 +15,8 @@ import net.imglib2.RandomAccess;
 import net.imglib2.RandomAccessibleInterval;
 import net.imglib2.type.BooleanType;
 import net.imglib2.util.ValuePair;
-import net.imglib2.view.ExtendedRandomAccessibleInterval;
-import net.imglib2.view.Views;
 
+import org.scijava.plugin.Parameter;
 import org.scijava.plugin.Plugin;
 import org.scijava.vecmath.Vector3d;
 
@@ -28,11 +29,14 @@ public class CountInterfaces<B extends BooleanType<B>> extends
 	Contingent
 {
 
+	@Parameter(required = false)
+	private long vectors = 50_000;
+
 	private static final Random random = new Random(System.currentTimeMillis());
 	private long width;
 	private long height;
 	private long depth;
-	private List<Plane> planes;
+	private List<Plane> stackPlanes;
 
 	@Override
 	public boolean conforms() {
@@ -40,73 +44,77 @@ public class CountInterfaces<B extends BooleanType<B>> extends
 		return in1().numDimensions() == 3;
 	}
 
+	private Supplier<ValuePair<Plane, Plane>> planePairs = this::selectPlanes;
+
 	@Override
 	public Long calculate(final RandomAccessibleInterval<B> interval,
 		final Double increment)
 	{
 		initialize(interval);
-		final ValuePair<Plane, Plane> planes = selectPlanes();
-		final ValuePair<Vector3d, Vector3d> segment = createSegment(planes);
-		final Vector3d origin = segment.a;
-		final Vector3d direction = findDirection(segment);
-		final double tMax = planes.b.intersection(origin, direction);
-		if (tMax == 0.0) {
-			return 0L;
+		final Stream<Vector3d> samplePoints = Stream.generate(planePairs).parallel().map(
+			planes -> {
+				final ValuePair<Vector3d, Vector3d> segment = createSegment(planes);
+				final Vector3d origin = segment.a;
+				final Vector3d direction = findDirection(segment);
+				final double tMax = planes.b.intersection(origin, direction);
+				final int iterations = (int) Math.floor(Math.abs(tMax / increment));
+				return IntStream.rangeClosed(1, iterations).mapToDouble(i -> i *
+					increment).mapToObj(t -> createSamplePoint(origin, direction, t))
+					.filter(v -> !outOfBounds(v));
+			}).flatMap(s -> s).limit(vectors);
+		final long[] samples = samplePoints.mapToLong(p -> sample(interval, p))
+			.toArray();
+		long intersections = 0L;
+		for (int i = 0; i < samples.length - 1; i++) {
+			intersections += Math.abs(samples[i] - samples[i + 1]);
 		}
-
-		final long iterations = (long) Math.floor(tMax / increment);
-		double t = increment;
-		long intersections = 0;
-		boolean lastPoint = sample(interval, origin, direction, t);
-		for (int i = 2; i <= iterations; i++) {
-			// Optional - not present when sample OoB
-			final boolean point = sample(interval, origin, direction, t);
-			if (lastPoint != point) {
-				intersections++;
-			}
-			t += increment;
-			lastPoint = point;
-
-		}
-
 		return intersections;
 	}
 
-	private ValuePair<Plane, Plane> selectPlanes() {
-		int n = planes.size();
-		final int[] indices = IntStream.range(0, n).toArray();
-		int i = random.nextInt(n);
-		final Plane startPlane = planes.get(indices[i]);
-		final int tmp = indices[n - 1];
-		indices[n - 1] = indices[i];
-		indices[i] = tmp;
-		n = n - 1;
-		i = random.nextInt(n);
-		final Plane endPlane = planes.get(indices[i]);
-		return new ValuePair<>(startPlane, endPlane);
-	}
-
-	private boolean sample(final RandomAccessibleInterval<B> interval,
-		final Vector3d origin, final Vector3d direction, final double t)
+	public static Vector3d createSamplePoint(final Vector3d origin,
+		final Vector3d direction, final double t)
 	{
 		final Vector3d samplePoint = new Vector3d(direction);
 		samplePoint.scale(t);
 		samplePoint.add(origin);
-		RandomAccess<B> access = interval.randomAccess();
-		final B variable = access.get().createVariable();
-		variable.set(false);
-		final ExtendedRandomAccessibleInterval<B, RandomAccessibleInterval<B>> safeInterval =
-			Views.extendValue(interval, variable);
-		final long[] coordinates = { Math.round(samplePoint.x), Math.round(
-			samplePoint.y), Math.round(samplePoint.z) };
-		final String s = Arrays.toString(coordinates);
-		System.out.println(s);
-		access = safeInterval.randomAccess();
-		access.setPosition(coordinates);
-		return access.get().get();
+		return samplePoint;
 	}
 
-	private Vector3d findDirection(final ValuePair<Vector3d, Vector3d> segment) {
+	private ValuePair<Plane, Plane> selectPlanes() {
+		final int n = stackPlanes.size();
+		final int[] indices = IntStream.range(0, n).toArray();
+		final int i = random.nextInt(n);
+		swap(indices, i, n - 1);
+		final int j = random.nextInt(n - 1);
+		final Plane startPlane = stackPlanes.get(indices[i]);
+		final Plane endPlane = stackPlanes.get(indices[j]);
+		return new ValuePair<>(startPlane, endPlane);
+	}
+
+	private void swap(final int[] indices, final int i, final int j) {
+		final int tmp = indices[j];
+		indices[j] = indices[i];
+		indices[i] = tmp;
+	}
+
+	private long sample(final RandomAccessibleInterval<B> interval,
+		final Vector3d samplePoint)
+	{
+		final RandomAccess<B> access = interval.randomAccess();
+		final long x = Math.round(samplePoint.x);
+		final long y = Math.round(samplePoint.y);
+		final long z = Math.round(samplePoint.z);
+		final long[] coordinates = { x, y, z };
+		access.setPosition(coordinates);
+		return (long) access.get().getRealDouble();
+	}
+
+	private boolean outOfBounds(final Vector3d v) {
+		return (v.x < 0) || (v.x > (width - 1)) || (v.y < 0) || (v.y > (height -
+			1)) || (v.z < 0) || (v.z > (depth - 1));
+	}
+
+	public static Vector3d findDirection(final ValuePair<Vector3d, Vector3d> segment) {
 		final Vector3d direction = new Vector3d(segment.b);
 		direction.sub(segment.a);
 		direction.normalize();
@@ -122,15 +130,12 @@ public class CountInterfaces<B extends BooleanType<B>> extends
 	}
 
 	private Vector3d randomPlanePoint(final Plane plane) {
-		final double startX = Math.min(plane.u.x, plane.v.x);
-		final double endX = Math.max(plane.u.x, plane.v.x);
-		final double startY = Math.min(plane.u.y, plane.v.y);
-		final double endY = Math.max(plane.u.y, plane.v.y);
-		final double startZ = Math.min(plane.u.z, plane.v.z);
-		final double endZ = Math.max(plane.u.z, plane.v.z);
-		final double x = random.nextDouble() * (endX - startX) + startX;
-		final double y = random.nextDouble() * (endY - startY) + startY;
-		final double z = random.nextDouble() * (endZ - startZ) + startZ;
+		final double x = random.nextDouble() * (plane.end.x - plane.start.x) +
+			plane.start.x;
+		final double y = random.nextDouble() * (plane.end.y - plane.start.y) +
+			plane.start.y;
+		final double z = random.nextDouble() * (plane.end.z - plane.start.z) +
+			plane.start.z;
 		return new Vector3d(x, y, z);
 	}
 
@@ -138,51 +143,59 @@ public class CountInterfaces<B extends BooleanType<B>> extends
 		width = interval.dimension(0);
 		height = interval.dimension(1);
 		depth = interval.dimension(2);
-		final Vector3d o = new Vector3d();
-		final Plane bottom = new Plane(o, new Vector3d(0.0, height, 0.0), o,
-			new Vector3d(width, 0.0, 0.0));
-		final Plane top = new Plane(new Vector3d(0.0, 0.0, depth), new Vector3d(0.0,
-			height, depth), new Vector3d(0.0, 0.0, depth), new Vector3d(width, 0.0,
-				depth));
-		final Plane left = new Plane(o, new Vector3d(0.0, height, 0.0), o,
-			new Vector3d(0.0, 0.0, depth));
-		final Plane right = new Plane(new Vector3d(width, 0.0, 0.0), new Vector3d(
-			width, height, 0.0), new Vector3d(width, 0.0, 0.0), new Vector3d(width,
-				0.0, depth));
-		final Plane front = new Plane(o, new Vector3d(width, 0.0, 0.0), o,
-			new Vector3d(0.0, 0.0, depth));
-		final Plane back = new Plane(new Vector3d(0.0, height, 0.0), new Vector3d(
-			width, height, 0.0), new Vector3d(0.0, height, 0.0), new Vector3d(0.0,
-				height, depth));
-		planes = Arrays.asList(bottom, top, left, right, front, back);
+		final Plane bottom = new Plane(new Vector3d(width - 1, 0, 0), new Vector3d(
+			0, height - 1, 0), new Vector3d(0, 0, 1));
+		final Plane top = new Plane(new Vector3d(width - 1, 0, depth - 1),
+			new Vector3d(0, height - 1, depth - 1), new Vector3d(0, 0, -1));
+		final Plane left = new Plane(new Vector3d(0, height - 1, 0), new Vector3d(0,
+			0, depth - 1), new Vector3d(1, 0, 0));
+		final Plane right = new Plane(new Vector3d(width - 1, height - 1, 0),
+			new Vector3d(width - 1, 0, depth - 1), new Vector3d(-1, 0, 0));
+		final Plane front = new Plane(new Vector3d(width - 1, 0, 0), new Vector3d(0,
+			0, depth - 1), new Vector3d(0, 1, 0));
+		final Plane back = new Plane(new Vector3d(width - 1, height - 1, 0),
+			new Vector3d(0, height - 1, depth - 1), new Vector3d(0, -1, 0));
+		stackPlanes = Arrays.asList(bottom, top, left, right, front, back);
 	}
 
 	private static class Plane {
 
-		public final Vector3d vMin;
-		public final Vector3d vMax;
-		public final Vector3d uMin;
 		public final Vector3d u;
-		public final Vector3d uMax;
 		public final Vector3d v;
 		public final Vector3d n;
 		public final Vector3d p;
+		public final Vector3d start;
+		public final Vector3d end;
 
-		public Plane(final Vector3d vMin, final Vector3d vMax, final Vector3d uMin,
-			final Vector3d uMax)
-		{
-			this.vMin = vMin;
-			this.vMax = vMax;
-			this.uMin = uMin;
-			this.uMax = uMax;
-			u = new Vector3d(uMax);
-			u.sub(uMin);
-			v = new Vector3d(vMax);
-			v.sub(vMin);
+		public Plane(final Vector3d u, final Vector3d v, final Vector3d n) {
+			this.u = new Vector3d(u);
+			this.v = new Vector3d(v);
 			p = new Vector3d((u.x + v.x) * 0.5, (u.y + v.y) * 0.5, (u.z + v.z) * 0.5);
-			n = new Vector3d();
-			n.cross(u, v);
-			n.normalize();
+			this.n = new Vector3d(n);
+			start = new Vector3d();
+			end = new Vector3d();
+			findBounds();
+		}
+
+		private void findBounds() {
+			final double[] uCoords = new double[3];
+			final double[] vCoords = new double[3];
+			u.get(uCoords);
+			v.get(vCoords);
+			final double[] minCoords = new double[3];
+			final double[] maxCoords = new double[3];
+			for (int i = 0; i < 3; i++) {
+				if (uCoords[i] <= vCoords[i]) {
+					minCoords[i] = uCoords[i];
+					maxCoords[i] = vCoords[i];
+				}
+				else {
+					minCoords[i] = vCoords[i];
+					maxCoords[i] = uCoords[i];
+				}
+			}
+			start.set(minCoords);
+			end.set(maxCoords);
 		}
 
 		public double intersection(Vector3d origin, Vector3d direction) {

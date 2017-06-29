@@ -2,9 +2,11 @@
 package org.bonej.ops;
 
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 import java.util.Random;
-import java.util.function.Supplier;
+import java.util.function.Function;
+import java.util.stream.DoubleStream;
 import java.util.stream.IntStream;
 import java.util.stream.Stream;
 
@@ -33,9 +35,6 @@ public class CountInterfaces<B extends BooleanType<B>> extends
 	private long vectors = 50_000;
 
 	private static final Random random = new Random(System.currentTimeMillis());
-	private long width;
-	private long height;
-	private long depth;
 	private List<Plane> stackPlanes;
 
 	@Override
@@ -44,31 +43,52 @@ public class CountInterfaces<B extends BooleanType<B>> extends
 		return in1().numDimensions() == 3;
 	}
 
-	private Supplier<ValuePair<Plane, Plane>> planePairs = this::selectPlanes;
+	/**
+	 * Allow setting the seed of the random generator to facilitate reproducible
+	 * tests
+	 */
+	public static void setSeed(final long seed) {
+		random.setSeed(seed);
+	}
 
 	@Override
 	public Long calculate(final RandomAccessibleInterval<B> interval,
 		final Double increment)
 	{
-		initialize(interval);
-		final Stream<Vector3d> samplePoints = Stream.generate(planePairs).parallel().map(
-			planes -> {
-				final ValuePair<Vector3d, Vector3d> segment = createSegment(planes);
-				final Vector3d origin = segment.a;
-				final Vector3d direction = findDirection(segment);
-				final double tMax = planes.b.intersection(origin, direction);
-				final int iterations = (int) Math.floor(Math.abs(tMax / increment));
-				return IntStream.rangeClosed(1, iterations).mapToDouble(i -> i *
-					increment).mapToObj(t -> createSamplePoint(origin, direction, t))
-					.filter(v -> !outOfBounds(v));
-			}).flatMap(s -> s).limit(vectors);
-		final long[] samples = samplePoints.mapToLong(p -> sample(interval, p))
+		stackPlanes = createStackPlanes(interval);
+		final Stream<ValuePair<Plane, Plane>> pairs = Stream.generate(
+			() -> selectPlanes(stackPlanes));
+		final long[] bounds = findBounds(interval);
+		final Stream<Vector3d> samplePoints = createSamplePoints(pairs, increment,
+			bounds);
+		final double[] samples = samplePoints.mapToDouble(p -> sample(interval, p))
 			.toArray();
 		long intersections = 0L;
 		for (int i = 0; i < samples.length - 1; i++) {
 			intersections += Math.abs(samples[i] - samples[i + 1]);
 		}
 		return intersections;
+	}
+
+	public static long[] findBounds(final RandomAccessibleInterval interval) {
+		final long[] bounds = new long[interval.numDimensions()];
+		interval.dimensions(bounds);
+		return bounds;
+	}
+
+	public static Stream<Vector3d> createSamplePoints(
+		final Stream<ValuePair<Plane, Plane>> pairs, final double increment,
+		final long[] bounds)
+	{
+		return pairs.parallel().map(planes -> {
+			final ValuePair<Vector3d, Vector3d> segment = createSegment(planes);
+			final Vector3d origin = segment.a;
+			final Vector3d direction = findDirection(segment);
+			final double tMax = planes.b.intersection(origin, direction);
+			final int iterations = (int) Math.floor(Math.abs(tMax / increment));
+			return IntStream.rangeClosed(1, iterations).mapToDouble(i -> i *
+				increment).mapToObj(t -> createSamplePoint(origin, direction, t));
+		}).flatMap(s -> s).filter(p -> !outOfBounds(p, bounds));
 	}
 
 	public static Vector3d createSamplePoint(final Vector3d origin,
@@ -80,85 +100,97 @@ public class CountInterfaces<B extends BooleanType<B>> extends
 		return samplePoint;
 	}
 
-	private ValuePair<Plane, Plane> selectPlanes() {
-		final int n = stackPlanes.size();
+	public static ValuePair<Plane, Plane> selectPlanes(List<Plane> planes) {
+		final int n = planes.size();
 		final int[] indices = IntStream.range(0, n).toArray();
 		final int i = random.nextInt(n);
 		swap(indices, i, n - 1);
 		final int j = random.nextInt(n - 1);
-		final Plane startPlane = stackPlanes.get(indices[i]);
-		final Plane endPlane = stackPlanes.get(indices[j]);
+		final Plane startPlane = planes.get(indices[i]);
+		final Plane endPlane = planes.get(indices[j]);
 		return new ValuePair<>(startPlane, endPlane);
 	}
 
-	private void swap(final int[] indices, final int i, final int j) {
+	private static void swap(final int[] indices, final int i, final int j) {
 		final int tmp = indices[j];
 		indices[j] = indices[i];
 		indices[i] = tmp;
 	}
 
-	private long sample(final RandomAccessibleInterval<B> interval,
-		final Vector3d samplePoint)
+	public static long[] toVoxelCoordinates(final Vector3d v) {
+		final Function<Double, Long> rounder = d -> (long) (random.nextDouble() > 0.5  ? Math.ceil(d) : Math.floor(d));
+		final long x = rounder.apply(v.x);
+		final long y = rounder.apply(v.y);
+		final long z = rounder.apply(v.z);
+		return new long[] { x, y, z };
+	}
+
+	public static <B extends BooleanType<B>> double sample(
+		final RandomAccessibleInterval<B> interval, final Vector3d samplePoint)
 	{
+		final long[] coordinates = toVoxelCoordinates(samplePoint);
 		final RandomAccess<B> access = interval.randomAccess();
-		final long x = Math.round(samplePoint.x);
-		final long y = Math.round(samplePoint.y);
-		final long z = Math.round(samplePoint.z);
-		final long[] coordinates = { x, y, z };
 		access.setPosition(coordinates);
-		return (long) access.get().getRealDouble();
+		return access.get().getRealDouble();
 	}
 
-	private boolean outOfBounds(final Vector3d v) {
-		return (v.x < 0) || (v.x > (width - 1)) || (v.y < 0) || (v.y > (height -
-			1)) || (v.z < 0) || (v.z > (depth - 1));
+	public static boolean outOfBounds(final Vector3d v, final long[] bounds) {
+		return (v.x < 0) || (v.x > (bounds[0] - 1)) || (v.y < 0) ||
+			(v.y > (bounds[1] - 1)) || (v.z < 0) || (v.z > (bounds[2] - 1));
 	}
 
-	public static Vector3d findDirection(final ValuePair<Vector3d, Vector3d> segment) {
+	public static Vector3d findDirection(
+		final ValuePair<Vector3d, Vector3d> segment)
+	{
 		final Vector3d direction = new Vector3d(segment.b);
 		direction.sub(segment.a);
 		direction.normalize();
 		return direction;
 	}
 
-	private ValuePair<Vector3d, Vector3d> createSegment(
+	private static ValuePair<Vector3d, Vector3d> createSegment(
 		final ValuePair<Plane, Plane> planes)
 	{
-		final Vector3d startPoint = randomPlanePoint(planes.a);
-		final Vector3d endPoint = randomPlanePoint(planes.b);
+		final Vector3d startPoint = randomPoint(planes.a.start, planes.a.end);
+		final Vector3d endPoint = randomPoint(planes.b.start, planes.b.end);
 		return new ValuePair<>(startPoint, endPoint);
 	}
 
-	private Vector3d randomPlanePoint(final Plane plane) {
-		final double x = random.nextDouble() * (plane.end.x - plane.start.x) +
-			plane.start.x;
-		final double y = random.nextDouble() * (plane.end.y - plane.start.y) +
-			plane.start.y;
-		final double z = random.nextDouble() * (plane.end.z - plane.start.z) +
-			plane.start.z;
+	/** Returns a random point in the space defined by the two vectors */
+	private static Vector3d randomPoint(final Vector3d start,
+		final Vector3d end)
+	{
+		final double x = random.nextDouble() * (end.x - start.x) + start.x;
+		final double y = random.nextDouble() * (end.y - start.y) + start.y;
+		final double z = random.nextDouble() * (end.z - start.z) + start.z;
 		return new Vector3d(x, y, z);
 	}
 
-	private void initialize(final RandomAccessibleInterval<B> interval) {
-		width = interval.dimension(0);
-		height = interval.dimension(1);
-		depth = interval.dimension(2);
-		final Plane bottom = new Plane(new Vector3d(width - 1, 0, 0), new Vector3d(
-			0, height - 1, 0), new Vector3d(0, 0, 1));
-		final Plane top = new Plane(new Vector3d(width - 1, 0, depth - 1),
-			new Vector3d(0, height - 1, depth - 1), new Vector3d(0, 0, -1));
-		final Plane left = new Plane(new Vector3d(0, height - 1, 0), new Vector3d(0,
-			0, depth - 1), new Vector3d(1, 0, 0));
-		final Plane right = new Plane(new Vector3d(width - 1, height - 1, 0),
-			new Vector3d(width - 1, 0, depth - 1), new Vector3d(-1, 0, 0));
-		final Plane front = new Plane(new Vector3d(width - 1, 0, 0), new Vector3d(0,
-			0, depth - 1), new Vector3d(0, 1, 0));
-		final Plane back = new Plane(new Vector3d(width - 1, height - 1, 0),
-			new Vector3d(0, height - 1, depth - 1), new Vector3d(0, -1, 0));
-		stackPlanes = Arrays.asList(bottom, top, left, right, front, back);
+	public static List<Plane> createStackPlanes(
+		final RandomAccessibleInterval stack)
+	{
+		final long xMax = stack.dimension(0) - 1;
+		final long yMax = stack.dimension(1) - 1;
+		final long zMax = stack.dimension(2) - 1;
+		final Plane bottom = new Plane(new Vector3d(xMax, 0, 0), new Vector3d(0,
+			yMax, 0), new Vector3d(0, 0, 1));
+		if (stack.numDimensions() == 2) {
+			return Collections.singletonList(bottom);
+		}
+		final Plane top = new Plane(new Vector3d(xMax, 0, zMax), new Vector3d(0,
+			yMax, zMax), new Vector3d(0, 0, -1));
+		final Plane left = new Plane(new Vector3d(0, yMax, 0), new Vector3d(0, 0,
+			zMax), new Vector3d(1, 0, 0));
+		final Plane right = new Plane(new Vector3d(xMax, yMax, 0), new Vector3d(
+			xMax, 0, zMax), new Vector3d(-1, 0, 0));
+		final Plane front = new Plane(new Vector3d(xMax, 0, 0), new Vector3d(0, 0,
+			zMax), new Vector3d(0, 1, 0));
+		final Plane back = new Plane(new Vector3d(xMax, yMax, 0), new Vector3d(0,
+			yMax, zMax), new Vector3d(0, -1, 0));
+		return Arrays.asList(bottom, top, left, right, front, back);
 	}
 
-	private static class Plane {
+	public static class Plane {
 
 		public final Vector3d u;
 		public final Vector3d v;

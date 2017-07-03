@@ -86,6 +86,7 @@ public class CountInterfaces<B extends BooleanType<B>> extends
 			final Vector3d direction = findDirection(segment);
 			final double tMax = planes.b.intersection(origin, direction);
 			final int iterations = (int) Math.floor(Math.abs(tMax / increment));
+			//TODO multiply by sign of tMax
 			return IntStream.rangeClosed(1, iterations).mapToDouble(i -> i *
 				increment).mapToObj(t -> createSamplePoint(origin, direction, t));
 		}).flatMap(s -> s).filter(p -> !outOfBounds(p, bounds));
@@ -124,6 +125,13 @@ public class CountInterfaces<B extends BooleanType<B>> extends
 		final long z = rounder.apply(v.z);
 		return new long[] { x, y, z };
 	}
+
+	public static double[] getOrientation(Vector3d v) {
+        final Vector3d xAxis = new Vector3d(1, 0, 0);
+        final Vector3d yAxis = new Vector3d(0, 1, 0);
+        final Vector3d zAxis = new Vector3d(0, 0, 1);
+        return new double[]{v.dot(xAxis), v.dot(yAxis), v.dot(zAxis)};
+    }
 
 	public static <B extends BooleanType<B>> double sample(
 		final RandomAccessibleInterval<B> interval, final Vector3d samplePoint)

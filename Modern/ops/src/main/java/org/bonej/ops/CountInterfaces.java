@@ -5,8 +5,6 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Random;
-import java.util.function.Function;
-import java.util.stream.DoubleStream;
 import java.util.stream.IntStream;
 import java.util.stream.Stream;
 
@@ -70,6 +68,13 @@ public class CountInterfaces<B extends BooleanType<B>> extends
 		return intersections;
 	}
 
+	public static Vector3d createOrigin(final double[] bounds) {
+		final double x = random.nextDouble() * bounds[0];
+		final double y = random.nextDouble() * bounds[1];
+		final double z = random.nextDouble() * bounds[2];
+		return new Vector3d(x, y, z);
+	}
+
 	public static long[] findBounds(final RandomAccessibleInterval interval) {
 		final long[] bounds = new long[interval.numDimensions()];
 		interval.dimensions(bounds);
@@ -86,9 +91,9 @@ public class CountInterfaces<B extends BooleanType<B>> extends
 			final Vector3d direction = findDirection(segment);
 			final double tMax = planes.b.intersection(origin, direction);
 			final int iterations = (int) Math.floor(Math.abs(tMax / increment));
-			//TODO multiply by sign of tMax
+			final double tIncrement = Math.signum(tMax) * increment;
 			return IntStream.rangeClosed(1, iterations).mapToDouble(i -> i *
-				increment).mapToObj(t -> createSamplePoint(origin, direction, t));
+				tIncrement).mapToObj(t -> createSamplePoint(origin, direction, t));
 		}).flatMap(s -> s).filter(p -> !outOfBounds(p, bounds));
 	}
 
@@ -105,9 +110,9 @@ public class CountInterfaces<B extends BooleanType<B>> extends
 		final int n = planes.size();
 		final int[] indices = IntStream.range(0, n).toArray();
 		final int i = random.nextInt(n);
+		final Plane startPlane = planes.get(indices[i]);
 		swap(indices, i, n - 1);
 		final int j = random.nextInt(n - 1);
-		final Plane startPlane = planes.get(indices[i]);
 		final Plane endPlane = planes.get(indices[j]);
 		return new ValuePair<>(startPlane, endPlane);
 	}
@@ -119,11 +124,9 @@ public class CountInterfaces<B extends BooleanType<B>> extends
 	}
 
 	public static long[] toVoxelCoordinates(final Vector3d v) {
-		final Function<Double, Long> rounder = d -> (long) (random.nextDouble() > 0.5  ? Math.ceil(d) : Math.floor(d));
-		final long x = rounder.apply(v.x);
-		final long y = rounder.apply(v.y);
-		final long z = rounder.apply(v.z);
-		return new long[] { x, y, z };
+		final double[] coordinates = new double[3];
+		v.get(coordinates);
+		return Arrays.stream(coordinates).mapToLong(c -> (long) Math.floor(c)).toArray();
 	}
 
 	public static double[] getOrientation(Vector3d v) {
@@ -143,8 +146,8 @@ public class CountInterfaces<B extends BooleanType<B>> extends
 	}
 
 	public static boolean outOfBounds(final Vector3d v, final long[] bounds) {
-		return (v.x < 0) || (v.x > (bounds[0] - 1)) || (v.y < 0) ||
-			(v.y > (bounds[1] - 1)) || (v.z < 0) || (v.z > (bounds[2] - 1));
+		return (v.x < 0) || (v.x > (bounds[0])) || (v.y < 0) ||
+			(v.y > (bounds[1])) || (v.z < 0) || (v.z > (bounds[2]));
 	}
 
 	public static Vector3d findDirection(
@@ -156,7 +159,7 @@ public class CountInterfaces<B extends BooleanType<B>> extends
 		return direction;
 	}
 
-	private static ValuePair<Vector3d, Vector3d> createSegment(
+	public static ValuePair<Vector3d, Vector3d> createSegment(
 		final ValuePair<Plane, Plane> planes)
 	{
 		final Vector3d startPoint = randomPoint(planes.a.start, planes.a.end);
@@ -177,9 +180,9 @@ public class CountInterfaces<B extends BooleanType<B>> extends
 	public static List<Plane> createStackPlanes(
 		final RandomAccessibleInterval stack)
 	{
-		final long xMax = stack.dimension(0) - 1;
-		final long yMax = stack.dimension(1) - 1;
-		final long zMax = stack.dimension(2) - 1;
+		final long xMax = stack.dimension(0);
+		final long yMax = stack.dimension(1);
+		final long zMax = stack.dimension(2);
 		final Plane bottom = new Plane(new Vector3d(xMax, 0, 0), new Vector3d(0,
 			yMax, 0), new Vector3d(0, 0, 1));
 		if (stack.numDimensions() == 2) {

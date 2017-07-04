@@ -3,8 +3,10 @@ package org.bonej.ops;
 
 import static org.bonej.ops.CountInterfaces.Plane;
 import static org.bonej.ops.CountInterfaces.createSamplePoints;
+import static org.bonej.ops.CountInterfaces.createSegment;
 import static org.bonej.ops.CountInterfaces.createStackPlanes;
 import static org.bonej.ops.CountInterfaces.findBounds;
+import static org.bonej.ops.CountInterfaces.findDirection;
 import static org.bonej.ops.CountInterfaces.selectPlanes;
 import static org.bonej.ops.CountInterfaces.toVoxelCoordinates;
 
@@ -63,41 +65,39 @@ public class CountInterfacesSamplingDistribution {
 		final RandomAccessibleInterval<UnsignedShortType> stack = ArrayImgs.unsignedShorts(width, height, depth);
 		CountInterfaces.setSeed(0xC0FF33);
 		final List<Plane> planes = createStackPlanes(stack);
-        final Stream<ValuePair<Plane, Plane>> pairs = Stream.generate(
-			() -> selectPlanes(planes));
-		final long[] bounds = findBounds(stack);
-		final Stream<Vector3d> samplePoints = createSamplePoints(pairs, 1.0,
-			bounds);
+		final long[] bounds = CountInterfaces.findBounds(stack);
+		final Stream<ValuePair<Plane, Plane>> pairs = Stream.generate(() -> selectPlanes(planes));
+		final Stream<Vector3d> samplePoints = CountInterfaces.createSamplePoints(pairs, 1.0, bounds);
+
+		/*final Stream<Vector3d> directions = pairs.map(pair -> {
+			final ValuePair<Vector3d, Vector3d> segment = createSegment(pair);
+			return findDirection(segment);
+		});
+
 
 		double[] orientations = new double[3];
 
-		samplePoints.limit(100).sequential().map(CountInterfaces::getOrientation).forEach(o -> {
-            System.out.println(Arrays.toString(o));
+		directions.limit(1_000_000).sequential().map(CountInterfaces::getOrientation).forEach(o -> {
             for (int i = 0; i < 3; i++) {
                 orientations[i] += o[i];
             }
         });
 
-        System.out.println(Arrays.toString(orientations));
+		Arrays.stream(orientations).map(d -> d / 1_000_000).forEach(System.out::println);*/
 
-		/*samplePoints.limit(1_000_000).sequential().forEach(point -> sample(stack, point));
+		samplePoints.limit(1_000_000).sequential().forEach(point -> sample(stack, point));
 		final IterableInterval<UnsignedShortType> iterable = Views.flatIterable(stack);
-        final long[] voxelSamples = new long[(int) voxels];
 
+		final SummaryStatistics statistics = new SummaryStatistics();
 		final Cursor<UnsignedShortType> cursor = iterable.cursor();
-		int i = 0;
 		while (cursor.hasNext()) {
 			final long samples = cursor.next().get();
-			voxelSamples[i] = samples;
-			i++;
+				statistics.addValue(samples);
 		}
 
-        final SummaryStatistics statistics = new SummaryStatistics();
-        Arrays.stream(voxelSamples).forEach(statistics::addValue);
-        System.out.println(statistics.toString());
-
-        final ImageJ imageJ = new ImageJ();
+		System.out.println(statistics.toString());
+		final ImageJ imageJ = new ImageJ();
         imageJ.launch(args);
-        imageJ.ui().show(stack);*/
+        imageJ.ui().show(stack);
     }
 }

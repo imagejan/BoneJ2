@@ -1,9 +1,21 @@
 
 package org.bonej.ops;
 
+import static org.bonej.ops.CountInterfaces.createStackPlanes;
+import static org.bonej.ops.CountInterfaces.selectPlanes;
 import static org.junit.Assert.assertEquals;
 
+import java.util.Collection;
+import java.util.List;
+import java.util.Map;
+import java.util.function.Function;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
+
 import net.imagej.ImageJ;
+import net.imglib2.RandomAccessibleInterval;
+import net.imglib2.img.array.ArrayImgs;
+import net.imglib2.type.numeric.integer.UnsignedShortType;
 import net.imglib2.util.ValuePair;
 
 import org.junit.AfterClass;
@@ -35,8 +47,8 @@ public class CountInterfacesTest {
 	@Test
 	public void testFindDirection() throws Exception {
 		final ValuePair<Vector3d, Vector3d> segment = new ValuePair<>(new Vector3d(
-			1, 1, 0), new Vector3d(5, 3, 10));
-		final Vector3d expected = new Vector3d(4, 2, 10);
+			1, 1, 0), new Vector3d(5, -3, 10));
+		final Vector3d expected = new Vector3d(4, -4, 10);
 		expected.normalize();
 
 		final Vector3d direction = CountInterfaces.findDirection(segment);
@@ -46,8 +58,20 @@ public class CountInterfacesTest {
 	}
 
 	@Test
-	public void testBox() throws Exception {
+	public void testSelectPlanes() throws Exception {
+		final RandomAccessibleInterval<UnsignedShortType> stack = ArrayImgs
+			.unsignedShorts(10, 10, 10);
+		CountInterfaces.setSeed(0xC0FF33);
+		final List<CountInterfaces.Plane> planes = createStackPlanes(stack);
+		final long samples = 1_000_000;
+		final double tolerance = 0.002;
+		final double expected = samples / 6.0;
 
+		final Collection<Long> counts = Stream.generate(() -> selectPlanes(planes)).limit(samples).collect(
+				Collectors.groupingBy(Function.identity(), Collectors.counting())).values();
+
+		//TODO test occurances of pairs with a hashing function!
+		counts.forEach(c -> assertEquals(1.0, c / expected, tolerance));
 	}
 
 	private static void assertVector(final double x, final double y,

@@ -59,7 +59,7 @@ public class CountInterfaces<B extends BooleanType<B>> extends
 		final long[] bounds = findBounds(interval);
 		final Stream<Vector3d> samplePoints = createSamplePoints(pairs, increment,
 			bounds);
-		final double[] samples = samplePoints.mapToDouble(p -> sample(interval, p))
+		final double[] samples = samplePoints.mapToDouble(p -> sample(interval, bounds, p))
 			.toArray();
 		long intersections = 0L;
 		for (int i = 0; i < samples.length - 1; i++) {
@@ -81,6 +81,7 @@ public class CountInterfaces<B extends BooleanType<B>> extends
 		return bounds;
 	}
 
+	//TODO perioidic sampling
 	public static Stream<Vector3d> createSamplePoints(
 		final Stream<ValuePair<Plane, Plane>> pairs, final double increment,
 		final long[] bounds)
@@ -90,10 +91,12 @@ public class CountInterfaces<B extends BooleanType<B>> extends
 			final Vector3d origin = segment.a;
 			final Vector3d direction = findDirection(segment);
 			final double tMax = planes.b.intersection(origin, direction);
+			// TODO largest diagonal of stack
 			final int iterations = (int) Math.floor(Math.abs(tMax / increment));
 			final double tIncrement = Math.signum(tMax) * increment;
 			return IntStream.rangeClosed(1, iterations).mapToDouble(i -> i *
 				tIncrement).mapToObj(t -> createSamplePoint(origin, direction, t));
+			//TODO remove outOfBounds with perioidic sampling
 		}).flatMap(s -> s).filter(p -> !outOfBounds(p, bounds));
 	}
 
@@ -123,10 +126,19 @@ public class CountInterfaces<B extends BooleanType<B>> extends
 		indices[i] = tmp;
 	}
 
-	public static long[] toVoxelCoordinates(final Vector3d v) {
+	public static long[] toVoxelCoordinates(final Vector3d v, final long[] bounds) {
 		final double[] coordinates = new double[3];
 		v.get(coordinates);
-		return Arrays.stream(coordinates).mapToLong(c -> (long) Math.floor(c)).toArray();
+		final long[] voxelCoordinates = new long[3];
+		for (int i = 0; i < 3; i++) {
+			/* TODO debug
+			voxelCoordinates[i] = ((long)Math.floor(coordinates[i]) % bounds[i]);
+			if (voxelCoordinates[i] < 0) {
+				voxelCoordinates[i] = bounds[i] + voxelCoordinates[i];
+			}*/
+			voxelCoordinates[i] = (long) Math.floor(coordinates[i]);
+		}
+		return voxelCoordinates;
 	}
 
 	public static double[] getOrientation(Vector3d v) {
@@ -137,9 +149,9 @@ public class CountInterfaces<B extends BooleanType<B>> extends
     }
 
 	public static <B extends BooleanType<B>> double sample(
-		final RandomAccessibleInterval<B> interval, final Vector3d samplePoint)
+		final RandomAccessibleInterval<B> interval, final long[] bounds, final Vector3d samplePoint)
 	{
-		final long[] coordinates = toVoxelCoordinates(samplePoint);
+		final long[] coordinates = toVoxelCoordinates(samplePoint, bounds);
 		final RandomAccess<B> access = interval.randomAccess();
 		access.setPosition(coordinates);
 		return access.get().getRealDouble();

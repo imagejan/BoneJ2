@@ -40,13 +40,19 @@ import org.scijava.vecmath.Vector3d;
 public class CountInterfacesSamplingDistribution {
 
 	private synchronized static <C extends ComplexType<C>> void sample(
-		final RandomAccessibleInterval<C> interval, final Vector3d point)
+		final RandomAccessibleInterval<C> interval, final long[] bounds, final Vector3d point)
 	{
-		final long[] coordinates = toVoxelCoordinates(point);
+		final long[] coordinates = toVoxelCoordinates(point, bounds);
 		final RandomAccess<C> access = interval.randomAccess(interval);
 		access.setPosition(coordinates);
 		final C voxel = access.get();
+		//System.out.println(Arrays.toString(coordinates));
 		voxel.setReal(voxel.getRealDouble() + 1.0);
+	}
+
+	private static <C extends ComplexType<C>> void plotOrigin(final RandomAccessibleInterval interval) {
+		final List<Plane> planes = createStackPlanes(interval);
+
 	}
 
 	public static void main(String... args) throws IOException {
@@ -61,40 +67,24 @@ public class CountInterfacesSamplingDistribution {
         final long width = 10;
 		final long height = 10;
 		final long depth = 10;
-		final long voxels = width * height * depth;
-		final RandomAccessibleInterval<UnsignedShortType> stack = ArrayImgs.unsignedShorts(width, height, depth);
+		final RandomAccessibleInterval<UnsignedIntType> stack = ArrayImgs.unsignedInts(width, height, depth);
 		CountInterfaces.setSeed(0xC0FF33);
 		final List<Plane> planes = createStackPlanes(stack);
 		final long[] bounds = CountInterfaces.findBounds(stack);
+
+		final long startTime = System.nanoTime();
 		final Stream<ValuePair<Plane, Plane>> pairs = Stream.generate(() -> selectPlanes(planes));
-		final Stream<Vector3d> samplePoints = CountInterfaces.createSamplePoints(pairs, 1.0, bounds);
+		final Stream<Vector3d> samplePoints = CountInterfaces.createSamplePoints(pairs, 1 / 2.3, bounds);
 
-		/*final Stream<Vector3d> directions = pairs.map(pair -> {
-			final ValuePair<Vector3d, Vector3d> segment = createSegment(pair);
-			return findDirection(segment);
-		});
+		//TODO random perioidicity?
+		samplePoints.limit(1_000_000).sequential().forEach(point -> sample(stack, bounds, point));
+		final long endTime = System.nanoTime();
+		final long durationMs = (endTime - startTime) / 1_000_000;
+		System.out.println("Duration (ms) " + durationMs);
 
-
-		double[] orientations = new double[3];
-
-		directions.limit(1_000_000).sequential().map(CountInterfaces::getOrientation).forEach(o -> {
-            for (int i = 0; i < 3; i++) {
-                orientations[i] += o[i];
-            }
-        });
-
-		Arrays.stream(orientations).map(d -> d / 1_000_000).forEach(System.out::println);*/
-
-		samplePoints.limit(1_000_000).sequential().forEach(point -> sample(stack, point));
-		final IterableInterval<UnsignedShortType> iterable = Views.flatIterable(stack);
-
+		final IterableInterval<UnsignedIntType> iterable = Views.flatIterable(stack);
 		final SummaryStatistics statistics = new SummaryStatistics();
-		final Cursor<UnsignedShortType> cursor = iterable.cursor();
-		while (cursor.hasNext()) {
-			final long samples = cursor.next().get();
-				statistics.addValue(samples);
-		}
-
+		iterable.cursor().forEachRemaining(i -> statistics.addValue(i.getIntegerLong()));
 		System.out.println(statistics.toString());
 		final ImageJ imageJ = new ImageJ();
         imageJ.launch(args);

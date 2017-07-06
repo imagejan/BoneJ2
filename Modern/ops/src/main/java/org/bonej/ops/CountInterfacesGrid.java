@@ -1,65 +1,159 @@
+
 package org.bonej.ops;
 
-import net.imagej.ImageJ;
-import net.imglib2.RandomAccess;
-import net.imglib2.RandomAccessibleInterval;
-import net.imglib2.img.array.ArrayImg;
-import net.imglib2.img.array.ArrayImgs;
-import net.imglib2.img.basictypeaccess.array.IntArray;
-import net.imglib2.type.BooleanType;
-import net.imglib2.type.numeric.ComplexType;
-import net.imglib2.type.numeric.integer.UnsignedIntType;
-import org.scijava.vecmath.Vector3d;
-
 import java.util.Arrays;
+import java.util.Collections;
+import java.util.HashSet;
+import java.util.List;
 import java.util.Random;
+import java.util.Set;
+import java.util.stream.IntStream;
+import java.util.stream.LongStream;
 import java.util.stream.Stream;
 
-import static org.bonej.ops.CountInterfaces.toVoxelCoordinates;
+import net.imglib2.RandomAccess;
+import net.imglib2.RandomAccessibleInterval;
+import net.imglib2.type.numeric.ComplexType;
+import net.imglib2.util.ValuePair;
+
+import org.bonej.ops.CountInterfaces.Plane;
+import org.scijava.vecmath.AxisAngle4d;
+import org.scijava.vecmath.Quat4d;
+import org.scijava.vecmath.Vector3d;
 
 /**
  * @author Richard Domander
  */
 public class CountInterfacesGrid {
-	private static Random random = new Random(0xc0ff33);
 
-	public static <C extends ComplexType<C>> long[] findBounds(final RandomAccessibleInterval<C> interval) {
+	private static Random random = new Random(0xc0ff33);
+	private static final Vector3d xAxis = new Vector3d(1.0, 0.0, 0.0);
+	private static final Vector3d yAxis = new Vector3d(0.0, 1.0, 0.0);
+	private static final Vector3d zAxis = new Vector3d(0.0, 0.0, 1.0);
+
+	public static <C extends ComplexType<C>> long[] findBounds(
+		final RandomAccessibleInterval<C> interval)
+	{
 		final long[] bounds = new long[interval.numDimensions()];
 		interval.dimensions(bounds);
 		return bounds;
 	}
 
-	public static Stream<Vector3d> plotGrid(final long gridSize, final double increment, final long[] bounds) {
-		// TODO add random offset
-		// TODO plot and order grid starting points and direction vectors to xyz
-		final Vector3d centroid = new Vector3d(bounds[0] * 0.5, bounds[1] * 0.5, bounds[2] * 0.5);
-		final Vector3d gridStart = new Vector3d(centroid);
-		final double[] offsetCoords = random.doubles(3, 0, increment - 1).toArray();
-		final Vector3d offset = new Vector3d(offsetCoords);
-
-		gridStart.sub(new Vector3d(gridSize * 0.5, gridSize * 0.5, gridSize * 0.5));
-		final Stream.Builder<Vector3d> originBuilder = Stream.builder();
-		for (double z = 0.0; z < gridSize; z += increment) {
-			for (double y = 0.0; y < gridSize; y += increment) {
-				for (double x = 0.0; x < gridSize; x += increment) {
-					final Vector3d v = new Vector3d(gridStart);
-					v.add(new Vector3d(x, y, z));
-					v.add(offset);
-					// TODO rotation
-					originBuilder.add(v);
-				}
-			}
-		}
-		return originBuilder.build().filter(v -> !outOfBounds(v, bounds));
+	public static Stream<ValuePair<Vector3d, Vector3d>> plotSamplers(
+		final long gridSize, final double spacing, final long[] bounds)
+	{
+		final Stream.Builder<ValuePair<Vector3d, Vector3d>> samplingBuilder = Stream
+			.builder();
+		plotPlane(samplingBuilder, gridSize, spacing, 0, 1);
+		plotPlane(samplingBuilder, gridSize, spacing, 0, 2);
+		plotPlane(samplingBuilder, gridSize, spacing, 1, 2);
+		final double[] angles = random.doubles(3, 0, Math.PI).toArray();
+		final Vector3d centroid = new Vector3d(bounds[0] * 0.5, bounds[1] * 0.5,
+			bounds[2] * 0.5);
+		return samplingBuilder.build().map(s -> rotateSampler(s, angles)).map(s -> {
+			s.a.add(centroid);
+			return s;
+		});
 	}
 
-	public static boolean outOfBounds(final Vector3d v, final long[] bounds) {
-		return (v.x < 0) || (v.x > (bounds[0])) || (v.y < 0) ||
-				(v.y > (bounds[1])) || (v.z < 0) || (v.z > (bounds[2]));
+	private static ValuePair<Vector3d, Vector3d> rotateSampler(
+		final ValuePair<Vector3d, Vector3d> sampler, final double[] angles)
+	{
+		return new ValuePair<>(rotateXYZ(sampler.a, angles), rotateXYZ(sampler.b,
+			angles));
+	}
+
+	private static Stream<Vector3d> samplePoints(
+		final ValuePair<Vector3d, Vector3d> sampler, final double scalar)
+	{
+		// todo find t-range for stack
+		return IntStream.range(0, 1).mapToDouble(i -> i * scalar).mapToObj(
+			t -> samplePoint(sampler, t));
+	}
+
+	private static Vector3d rotateXYZ(Vector3d v, final double[] angles) {
+		v = rotateAboutAxis(v, xAxis, angles[0]);
+		v = rotateAboutAxis(v, yAxis, angles[1]);
+		v = rotateAboutAxis(v, zAxis, angles[2]);
+		return v;
+	}
+
+	/**
+	 * Rotates the given point around the axis by theta angle
+	 *
+	 * @implNote Uses quaternions
+	 * @param point A point in 3D space
+	 * @param axis The axis of rotation
+	 * @param theta Angle of rotation in radians
+	 * @return The rotated point
+	 */
+	public static Vector3d rotateAboutAxis(final Vector3d point,
+		final Vector3d axis, final double theta)
+	{
+		final AxisAngle4d axisAngle4d = new AxisAngle4d(axis, theta);
+		final Quat4d q = new Quat4d();
+		q.set(axisAngle4d);
+		final Quat4d p = new Quat4d();
+		p.set(point.x, point.y, point.z, 0.0);
+		final Quat4d qInv = new Quat4d();
+		qInv.inverse(q);
+		final Quat4d rotated = new Quat4d();
+		rotated.mul(q, p);
+		rotated.mul(qInv);
+		return new Vector3d(rotated.x, rotated.y, rotated.z);
+	}
+
+	private static Vector3d samplePoint(
+		final ValuePair<Vector3d, Vector3d> sampler, final double t)
+	{
+		final Vector3d point = new Vector3d(sampler.b);
+		point.scale(t);
+		point.add(sampler.a);
+		return point;
+	}
+
+	public static void plotPlane(
+		final Stream.Builder<ValuePair<Vector3d, Vector3d>> samplingBuilder,
+		final long gridSize, final double spacing, final int dim0, final int dim1)
+	{
+		final Set<Integer> dims = new HashSet<>(Arrays.asList(0, 1, 2));
+		dims.remove(dim0);
+		dims.remove(dim1);
+		final int[] orthogonalDim = { dims.iterator().next() };
+		final Vector3d gridStart = new Vector3d(gridSize * 0.5, gridSize * 0.5,
+			gridSize * 0.5);
+		gridStart.negate();
+		final int[] planeDims = { dim0, dim1 };
+		final Vector3d normal = createSparseVector(orthogonalDim, 1.0);
+		// TODO Add random offset
+		for (double i = 0.0; i < gridSize; i += spacing) {
+			for (double j = 0.0; j < gridSize; j += spacing) {
+				final Vector3d origin = createSparseVector(planeDims, j, i);
+				origin.add(gridStart);
+				samplingBuilder.add(new ValuePair<>(origin, normal));
+			}
+		}
+	}
+
+	public static Vector3d createSparseVector(int[] dims, double... values) {
+		final double[] coordinates = new double[3];
+		for (int i = 0; i < dims.length; i++) {
+			coordinates[dims[i]] = values[i];
+		}
+		return new Vector3d(coordinates);
+	}
+
+	public static boolean outOfBounds(final long[] coordinates,
+		final long[] bounds)
+	{
+		return (coordinates[0] < 0) || (coordinates[0] > (bounds[0])) ||
+			(coordinates[1] < 0) || (coordinates[1] > (bounds[1])) ||
+			(coordinates[2] < 0) || (coordinates[2] > (bounds[2]));
 	}
 
 	public static long findGridSize(final long[] bounds) {
 		final long sumSquared = Arrays.stream(bounds).map(i -> i * i).sum();
+		// return bounds[0];
 		return (long) Math.ceil(Math.sqrt(sumSquared));
 	}
 
@@ -73,23 +167,64 @@ public class CountInterfacesGrid {
 		return voxelCoordinates;
 	}
 
-	public static <C extends ComplexType<C>> void sample(final Vector3d v, final RandomAccessibleInterval<C> interval) {
-		final long[] coordinates = toVoxelCoordinates(v);
+	public static <C extends ComplexType<C>> void sample(
+		final RandomAccessibleInterval<C> interval, final long[] coordinates)
+	{
 		final RandomAccess<C> access = interval.randomAccess(interval);
 		access.setPosition(coordinates);
 		final C voxel = access.get();
-		//System.out.println(Arrays.toString(coordinates));
 		voxel.setReal(voxel.getRealDouble() + 1.0);
 	}
 
-	public static void main(String... args) {
-		final RandomAccessibleInterval<UnsignedIntType> stack = ArrayImgs.unsignedInts(10, 10, 10);
-		final long[] bounds = findBounds(stack);
-		final long gridSize = findGridSize(bounds);
-		final Stream<Vector3d> grid = plotGrid(gridSize, 2.0, bounds);
-		grid.forEach(v -> sample(v, stack));
-		final ImageJ imageJ = new ImageJ();
-		imageJ.launch(args);
-		imageJ.ui().show(stack);
+	public static Stream<Vector3d> samplePoints(
+		final Stream<ValuePair<Vector3d, Vector3d>> samplers,
+		final double increment, final long[] bounds)
+	{
+		return samplers.flatMap(sampler -> {
+			ValuePair<Double, Double> tPair = findIntersections(sampler, bounds);
+			if (tPair == null) {
+				return Stream.empty();
+			}
+			final double diff = tPair.b - tPair.a;
+			final long iterations = (long) Math.ceil(Math.abs(diff) / increment);
+			final double signum = Math.signum(diff);
+			return LongStream.range(0, iterations).mapToDouble(i -> i * increment *
+				signum).mapToObj(t -> CountInterfacesGrid.samplePoint(sampler, tPair.a +
+					t));
+		});
+	}
+
+	public static ValuePair<Double, Double> findIntersections(
+		final ValuePair<Vector3d, Vector3d> sampler, final long[] bounds)
+	{
+		// Make min coordinates slightly negative to make vectors going parallel to
+		// stack planes intersect, e.g. origin (0, 0, 0) and direction (0, 0, 1)
+		final double minX = -1e-323;
+		final double maxX = bounds[0];
+		final double minY = -1e-323;
+		final double maxY = bounds[1];
+		final double minZ = -1e-323;
+		final double maxZ = bounds[2];
+		final double tX0 = (minX - sampler.a.x) / sampler.b.x;
+		final double tX1 = (maxX - sampler.a.x) / sampler.b.x;
+		final double tY0 = (minY - sampler.a.y) / sampler.b.y;
+		final double tY1 = (maxY - sampler.a.y) / sampler.b.y;
+		final double tZ0 = (minZ - sampler.a.z) / sampler.b.z;
+		final double tZ1 = (maxZ - sampler.a.z) / sampler.b.z;
+		if (tX0 > tY1 || tY0 > tX1) {
+			return null;
+		}
+		double tMin = Math.max(tX0, tY0);
+		double tMax = Math.min(tX1, tY1);
+		if (tMin > tZ1 || tZ0 > tMax) {
+			return null;
+		}
+		tMin = Math.max(tZ0, tMin);
+		tMax = Math.min(tZ1, tMax);
+		if (Double.isNaN(tMin) || Double.isNaN(tMax)) {
+			return null;
+		}
+
+		return new ValuePair<>(tMin, tMax);
 	}
 }

@@ -2,9 +2,7 @@
 package org.bonej.ops;
 
 import java.util.Arrays;
-import java.util.Collections;
 import java.util.HashSet;
-import java.util.List;
 import java.util.Random;
 import java.util.Set;
 import java.util.stream.IntStream;
@@ -16,7 +14,6 @@ import net.imglib2.RandomAccessibleInterval;
 import net.imglib2.type.numeric.ComplexType;
 import net.imglib2.util.ValuePair;
 
-import org.bonej.ops.CountInterfaces.Plane;
 import org.scijava.vecmath.AxisAngle4d;
 import org.scijava.vecmath.Quat4d;
 import org.scijava.vecmath.Vector3d;
@@ -40,23 +37,25 @@ public class CountInterfacesGrid {
 	}
 
 	public static Stream<ValuePair<Vector3d, Vector3d>> plotSamplers(
-		final long gridSize, final double spacing, final long[] bounds)
+		final long gridSize, final long sections, final long[] bounds)
 	{
 		final Stream.Builder<ValuePair<Vector3d, Vector3d>> samplingBuilder = Stream
 			.builder();
-		plotPlane(samplingBuilder, gridSize, spacing, 0, 1);
-		plotPlane(samplingBuilder, gridSize, spacing, 0, 2);
-		plotPlane(samplingBuilder, gridSize, spacing, 1, 2);
-		final double[] angles = random.doubles(3, 0, Math.PI).toArray();
-		final Vector3d centroid = new Vector3d(bounds[0] * 0.5, bounds[1] * 0.5,
-			bounds[2] * 0.5);
+		plotPlane(samplingBuilder, bounds, gridSize, sections, 0, 1);
+		plotPlane(samplingBuilder, bounds, gridSize, sections, 0, 2);
+		plotPlane(samplingBuilder, bounds, gridSize, sections, 1, 2);
+		// Math.PI * 2
+		final double[] angles =  random.doubles(3, 0, Math.PI).toArray();
+		final Vector3d centroid = new Vector3d(bounds[0] - 1, bounds[1] - 1,
+			bounds[2] - 1);
+		centroid.scale(0.5);
 		return samplingBuilder.build().map(s -> rotateSampler(s, angles)).map(s -> {
 			s.a.add(centroid);
 			return s;
 		});
 	}
 
-	private static ValuePair<Vector3d, Vector3d> rotateSampler(
+	public static ValuePair<Vector3d, Vector3d> rotateSampler(
 		final ValuePair<Vector3d, Vector3d> sampler, final double[] angles)
 	{
 		return new ValuePair<>(rotateXYZ(sampler.a, angles), rotateXYZ(sampler.b,
@@ -114,23 +113,33 @@ public class CountInterfacesGrid {
 
 	public static void plotPlane(
 		final Stream.Builder<ValuePair<Vector3d, Vector3d>> samplingBuilder,
-		final long gridSize, final double spacing, final int dim0, final int dim1)
+		final long[] bounds, final long gridSize, final long segments,
+		final int dim0, final int dim1)
 	{
 		final Set<Integer> dims = new HashSet<>(Arrays.asList(0, 1, 2));
 		dims.remove(dim0);
 		dims.remove(dim1);
-		final int[] orthogonalDim = { dims.iterator().next() };
-		final Vector3d gridStart = new Vector3d(gridSize * 0.5, gridSize * 0.5,
-			gridSize * 0.5);
-		gridStart.negate();
+		final int[] orthogonalDims = { dims.iterator().next() };
 		final int[] planeDims = { dim0, dim1 };
-		final Vector3d normal = createSparseVector(orthogonalDim, 1.0);
+		final Vector3d normal = createSparseVector(orthogonalDims, 1.0);
+		final Vector3d planeShift = createSparseVector(orthogonalDims, 0.5 *
+			(bounds[orthogonalDims[0]] - gridSize));
+		final Vector3d p0 = createSparseVector(planeDims, -0.5 * gridSize, -0.5 *
+			gridSize);
+		final Vector3d p1 = createSparseVector(planeDims, 0.5 * gridSize, 0.5 *
+			gridSize);
+		final Vector3d gridLine = new Vector3d();
+		gridLine.sub(p1, p0);
+		final double[] coords = new double[3];
+		gridLine.get(coords);
 		// TODO Add random offset
-		for (double i = 0.0; i < gridSize; i += spacing) {
-			for (double j = 0.0; j < gridSize; j += spacing) {
-				final Vector3d origin = createSparseVector(planeDims, j, i);
-				origin.add(gridStart);
-				samplingBuilder.add(new ValuePair<>(origin, normal));
+		for (long i = 0; i <= segments; i++) {
+			for (long j = 0; j <= segments; j++) {
+				final Vector3d v = createSparseVector(planeDims, (1.0 * j / segments *
+					coords[dim0]), (1.0 * i / segments * coords[dim1]));
+				v.add(planeShift);
+				v.add(p0);
+				samplingBuilder.add(new ValuePair<>(v, normal));
 			}
 		}
 	}
@@ -152,9 +161,7 @@ public class CountInterfacesGrid {
 	}
 
 	public static long findGridSize(final long[] bounds) {
-		final long sumSquared = Arrays.stream(bounds).map(i -> i * i).sum();
-		// return bounds[0];
-		return (long) Math.ceil(Math.sqrt(sumSquared));
+		return Arrays.stream(bounds).max().orElse(0);
 	}
 
 	public static long[] toVoxelCoordinates(final Vector3d v) {

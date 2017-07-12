@@ -5,7 +5,7 @@ import java.util.Arrays;
 import java.util.HashSet;
 import java.util.Random;
 import java.util.Set;
-import java.util.stream.IntStream;
+import java.util.stream.DoubleStream;
 import java.util.stream.LongStream;
 import java.util.stream.Stream;
 
@@ -44,8 +44,7 @@ public class CountInterfacesGrid {
 		plotPlane(samplingBuilder, bounds, gridSize, sections, 0, 1);
 		plotPlane(samplingBuilder, bounds, gridSize, sections, 0, 2);
 		plotPlane(samplingBuilder, bounds, gridSize, sections, 1, 2);
-		// Math.PI * 2
-		final double[] angles =  random.doubles(3, 0, Math.PI).toArray();
+		final double[] angles = random.doubles(3, 0, Math.PI).toArray();
 		final Vector3d centroid = new Vector3d(bounds[0] - 1, bounds[1] - 1,
 			bounds[2] - 1);
 		centroid.scale(0.5);
@@ -60,14 +59,6 @@ public class CountInterfacesGrid {
 	{
 		return new ValuePair<>(rotateXYZ(sampler.a, angles), rotateXYZ(sampler.b,
 			angles));
-	}
-
-	private static Stream<Vector3d> samplePoints(
-		final ValuePair<Vector3d, Vector3d> sampler, final double scalar)
-	{
-		// todo find t-range for stack
-		return IntStream.range(0, 1).mapToDouble(i -> i * scalar).mapToObj(
-			t -> samplePoint(sampler, t));
 	}
 
 	private static Vector3d rotateXYZ(Vector3d v, final double[] angles) {
@@ -122,8 +113,7 @@ public class CountInterfacesGrid {
 		final int[] orthogonalDims = { dims.iterator().next() };
 		final int[] planeDims = { dim0, dim1 };
 		final Vector3d normal = createSparseVector(orthogonalDims, 1.0);
-		final Vector3d planeShift = createSparseVector(orthogonalDims, 0.5 *
-			(bounds[orthogonalDims[0]] - gridSize));
+		final Vector3d planeShift = createSparseVector(orthogonalDims, -0.5 * gridSize);
 		final Vector3d p0 = createSparseVector(planeDims, -0.5 * gridSize, -0.5 *
 			gridSize);
 		final Vector3d p1 = createSparseVector(planeDims, 0.5 * gridSize, 0.5 *
@@ -155,13 +145,14 @@ public class CountInterfacesGrid {
 	public static boolean outOfBounds(final long[] coordinates,
 		final long[] bounds)
 	{
-		return (coordinates[0] < 0) || (coordinates[0] > (bounds[0])) ||
-			(coordinates[1] < 0) || (coordinates[1] > (bounds[1])) ||
-			(coordinates[2] < 0) || (coordinates[2] > (bounds[2]));
+		return (coordinates[0] < 0) || (coordinates[0] >= (bounds[0])) ||
+			(coordinates[1] < 0) || (coordinates[1] >= (bounds[1])) ||
+			(coordinates[2] < 0) || (coordinates[2] >= (bounds[2]));
 	}
 
 	public static long findGridSize(final long[] bounds) {
-		return Arrays.stream(bounds).max().orElse(0);
+		final long sumSquared = Arrays.stream(bounds).map(i -> i * i).sum();
+		return (long) Math.ceil(Math.sqrt(sumSquared));
 	}
 
 	public static long[] toVoxelCoordinates(final Vector3d v) {
@@ -185,53 +176,11 @@ public class CountInterfacesGrid {
 
 	public static Stream<Vector3d> samplePoints(
 		final Stream<ValuePair<Vector3d, Vector3d>> samplers,
-		final double increment, final long[] bounds)
+		final double increment, final long gridSize)
 	{
-		return samplers.flatMap(sampler -> {
-			ValuePair<Double, Double> tPair = findIntersections(sampler, bounds);
-			if (tPair == null) {
-				return Stream.empty();
-			}
-			final double diff = tPair.b - tPair.a;
-			final long iterations = (long) Math.ceil(Math.abs(diff) / increment);
-			final double signum = Math.signum(diff);
-			return LongStream.range(0, iterations).mapToDouble(i -> i * increment *
-				signum).mapToObj(t -> CountInterfacesGrid.samplePoint(sampler, tPair.a +
-					t));
-		});
-	}
+		final long iterations = (long) Math.floor(gridSize / increment) + 1;
 
-	public static ValuePair<Double, Double> findIntersections(
-		final ValuePair<Vector3d, Vector3d> sampler, final long[] bounds)
-	{
-		// Make min coordinates slightly negative to make vectors going parallel to
-		// stack planes intersect, e.g. origin (0, 0, 0) and direction (0, 0, 1)
-		final double minX = -1e-323;
-		final double maxX = bounds[0];
-		final double minY = -1e-323;
-		final double maxY = bounds[1];
-		final double minZ = -1e-323;
-		final double maxZ = bounds[2];
-		final double tX0 = (minX - sampler.a.x) / sampler.b.x;
-		final double tX1 = (maxX - sampler.a.x) / sampler.b.x;
-		final double tY0 = (minY - sampler.a.y) / sampler.b.y;
-		final double tY1 = (maxY - sampler.a.y) / sampler.b.y;
-		final double tZ0 = (minZ - sampler.a.z) / sampler.b.z;
-		final double tZ1 = (maxZ - sampler.a.z) / sampler.b.z;
-		if (tX0 > tY1 || tY0 > tX1) {
-			return null;
-		}
-		double tMin = Math.max(tX0, tY0);
-		double tMax = Math.min(tX1, tY1);
-		if (tMin > tZ1 || tZ0 > tMax) {
-			return null;
-		}
-		tMin = Math.max(tZ0, tMin);
-		tMax = Math.min(tZ1, tMax);
-		if (Double.isNaN(tMin) || Double.isNaN(tMax)) {
-			return null;
-		}
-
-		return new ValuePair<>(tMin, tMax);
+		return samplers.flatMap(sampler -> DoubleStream.iterate(0.0, t -> t +
+			increment).mapToObj(t -> CountInterfacesGrid.samplePoint(sampler, t)).limit(iterations));
 	}
 }

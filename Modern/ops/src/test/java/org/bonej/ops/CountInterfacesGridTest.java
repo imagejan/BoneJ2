@@ -30,11 +30,11 @@ public class CountInterfacesGridTest {
 		final RandomAccessibleInterval<UnsignedIntType> stack = ArrayImgs
 			.unsignedInts(10, 10, 10);
 		final long[] bounds = findBounds(stack);
-		final long gridSize = findGridSize(bounds);
-		final long rotations = 100_000;
+		final double gridSize = findGridSize(bounds);
+		final long rotations = 10_000_000;
 		final long startTime = System.nanoTime();
 		final Stream<ValuePair<Vector3d, Vector3d>> samplers = Stream.generate(
-			() -> plotSamplers(gridSize, gridSize, bounds)).limit(rotations).flatMap(
+			() -> plotSamplers(gridSize, (long) gridSize, bounds)).limit(rotations).flatMap(
 				s -> s);
 		final Stream<Vector3d> points = samplePoints(samplers, 1 / 2.3, gridSize);
 		points.map(CountInterfacesGrid::toVoxelCoordinates).filter(

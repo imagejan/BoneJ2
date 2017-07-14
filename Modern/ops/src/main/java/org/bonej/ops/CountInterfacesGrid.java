@@ -12,6 +12,7 @@ import java.util.stream.Stream;
 import net.imglib2.RandomAccess;
 import net.imglib2.RandomAccessibleInterval;
 import net.imglib2.type.numeric.ComplexType;
+import net.imglib2.type.numeric.NumericType;
 import net.imglib2.util.ValuePair;
 
 import org.apache.commons.math3.random.UnitSphereRandomVectorGenerator;
@@ -24,14 +25,12 @@ import org.scijava.vecmath.Vector3d;
  */
 public class CountInterfacesGrid {
 
-	private static final Random random = new Random(0xc0ff33);
 	private static final UnitSphereRandomVectorGenerator generator =
 		new UnitSphereRandomVectorGenerator(4);
-	private static final Vector3d xAxis = new Vector3d(1.0, 0.0, 0.0);
-	private static final Vector3d yAxis = new Vector3d(0.0, 1.0, 0.0);
-	private static final Vector3d zAxis = new Vector3d(0.0, 0.0, 1.0);
+	private static final Random random = new Random(System.currentTimeMillis() +
+		System.identityHashCode(new Object()));
 
-	public static <C extends ComplexType<C>> long[] findBounds(
+	public static <C extends NumericType<C>> long[] findBounds(
 		final RandomAccessibleInterval<C> interval)
 	{
 		final long[] bounds = new long[interval.numDimensions()];
@@ -65,48 +64,24 @@ public class CountInterfacesGrid {
 				s.a.add(centroid);
 				return s;
 			};
-		return samplingBuilder.build().map(s -> rotateSampler(s, unitQuaternion)).map(
-			translateToCentre);
+		return samplingBuilder.build().map(s -> rotateSampler(s, unitQuaternion))
+			.map(translateToCentre);
 	}
 
 	public static ValuePair<Vector3d, Vector3d> rotateSampler(
-		final ValuePair<Vector3d, Vector3d> sampler, final double[] unitQuaternion)
+		final ValuePair<Vector3d, Vector3d> sampler,
+		final double[] unitQuaternion)
 	{
-		return new ValuePair<>(rotateXYZ(sampler.a, unitQuaternion), rotateXYZ(sampler.b,
-			unitQuaternion));
+		return new ValuePair<>(rotateXYZ(sampler.a, unitQuaternion), rotateXYZ(
+			sampler.b, unitQuaternion));
 	}
 
-	private static Vector3d rotateXYZ(Vector3d v, final double[] unitQuaternion) {
+	public static Vector3d rotateXYZ(Vector3d v, final double[] unitQuaternion) {
 		final Quat4d q = new Quat4d(unitQuaternion);
 		final Quat4d p = new Quat4d();
 		p.set(v.x, v.y, v.z, 0.0);
 		final Quat4d qInv = new Quat4d(unitQuaternion);
 		qInv.inverse();
-		final Quat4d rotated = new Quat4d();
-		rotated.mul(q, p);
-		rotated.mul(qInv);
-		return new Vector3d(rotated.x, rotated.y, rotated.z);
-	}
-
-	/**
-	 * Rotates the given point around the axis by theta angle
-	 *
-	 * @implNote Uses quaternions
-	 * @param point A point in 3D space
-	 * @param axis The axis of rotation
-	 * @param theta Angle of rotation in radians
-	 * @return The rotated point
-	 */
-	public static Vector3d rotateAboutAxis(final Vector3d point,
-		final Vector3d axis, final double theta)
-	{
-		final AxisAngle4d axisAngle4d = new AxisAngle4d(axis, theta);
-		final Quat4d q = new Quat4d();
-		q.set(axisAngle4d);
-		final Quat4d p = new Quat4d();
-		p.set(point.x, point.y, point.z, 0.0);
-		final Quat4d qInv = new Quat4d();
-		qInv.inverse(q);
 		final Quat4d rotated = new Quat4d();
 		rotated.mul(q, p);
 		rotated.mul(qInv);
@@ -165,7 +140,7 @@ public class CountInterfacesGrid {
 	public static double weightedAverage(final double weight, final double a,
 		final double b)
 	{
-		return (weight * a + (1.0 - weight) * b) * 0.5;
+		return weight * a + (1.0 - weight) * b;
 	}
 
 	public static Vector3d createSparseVector(int[] dims, double... values) {

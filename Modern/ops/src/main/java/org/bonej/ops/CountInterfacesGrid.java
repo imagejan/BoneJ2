@@ -16,7 +16,7 @@ import net.imglib2.type.numeric.NumericType;
 import net.imglib2.util.ValuePair;
 
 import org.apache.commons.math3.random.UnitSphereRandomVectorGenerator;
-import org.scijava.vecmath.AxisAngle4d;
+import org.apache.commons.math3.util.FastMath;
 import org.scijava.vecmath.Quat4d;
 import org.scijava.vecmath.Vector3d;
 
@@ -43,14 +43,9 @@ public class CountInterfacesGrid {
 	{
 		final Stream.Builder<ValuePair<Vector3d, Vector3d>> samplingBuilder = Stream
 			.builder();
-		final double offset0 = random.nextDouble();
-		final double offset1 = random.nextDouble();
-		plotPlane(samplingBuilder, bounds, gridSize, sections, 0, 1, offset0,
-			offset1);
-		plotPlane(samplingBuilder, bounds, gridSize, sections, 0, 2, offset0,
-			offset1);
-		plotPlane(samplingBuilder, bounds, gridSize, sections, 1, 2, offset0,
-			offset1);
+		plotPlane(samplingBuilder, gridSize, sections, 0, 1);
+		plotPlane(samplingBuilder, gridSize, sections, 0, 2);
+		plotPlane(samplingBuilder, gridSize, sections, 1, 2);
 
 		// create a four-element vector where each element is a sampling of a normal
 		// distribution. Normalize its length and you have a uniformly sampled
@@ -64,28 +59,28 @@ public class CountInterfacesGrid {
 				s.a.add(centroid);
 				return s;
 			};
-		return samplingBuilder.build().map(s -> rotateSampler(s, unitQuaternion))
-			.map(translateToCentre);
+		return samplingBuilder.build().map(
+			s -> rotateSampler(s, unitQuaternion)).map(translateToCentre);
 	}
 
 	public static ValuePair<Vector3d, Vector3d> rotateSampler(
 		final ValuePair<Vector3d, Vector3d> sampler,
 		final double[] unitQuaternion)
 	{
-		return new ValuePair<>(rotateXYZ(sampler.a, unitQuaternion), rotateXYZ(
-			sampler.b, unitQuaternion));
+		rotateXYZ(sampler.a, unitQuaternion);
+		rotateXYZ(sampler.b, unitQuaternion);
+		return sampler;
 	}
 
-	public static Vector3d rotateXYZ(Vector3d v, final double[] unitQuaternion) {
-		final Quat4d q = new Quat4d(unitQuaternion);
+	public static void rotateXYZ(final Vector3d v, final double[] q) {
 		final Quat4d p = new Quat4d();
 		p.set(v.x, v.y, v.z, 0.0);
-		final Quat4d qInv = new Quat4d(unitQuaternion);
-		qInv.inverse();
-		final Quat4d rotated = new Quat4d();
-		rotated.mul(q, p);
+		final Quat4d qInv = new Quat4d();
+		qInv.set(-q[0], -q[1], -q[2], q[3]);
+		final Quat4d rotated = new Quat4d(q);
+		rotated.mul(p);
 		rotated.mul(qInv);
-		return new Vector3d(rotated.x, rotated.y, rotated.z);
+		v.set(rotated.x, rotated.y, rotated.z);
 	}
 
 	private static Vector3d samplePoint(
@@ -99,59 +94,44 @@ public class CountInterfacesGrid {
 
 	public static void plotPlane(
 		final Stream.Builder<ValuePair<Vector3d, Vector3d>> samplingBuilder,
-		final long[] bounds, final double gridSize, final long segments,
-		final int dim0, final int dim1, final double offset0,
-		final double offset1)
+		final double gridSize, final long segments, final int dim0,
+		final int dim1)
 	{
-		final Set<Integer> dims = new HashSet<>(Arrays.asList(0, 1, 2));
-		dims.remove(dim0);
-		dims.remove(dim1);
-		final int[] orthogonalDims = { dims.iterator().next() };
-		final int[] planeDims = { dim0, dim1 };
-		final Vector3d normal = createSparseVector(orthogonalDims, 1.0);
-		final Vector3d planeShift = createSparseVector(orthogonalDims, -0.5 *
-			gridSize);
-		final Vector3d p0 = createSparseVector(planeDims, -0.5 * gridSize, -0.5 *
-			gridSize);
-		final Vector3d p1 = createSparseVector(planeDims, 0.5 * gridSize, 0.5 *
-			gridSize);
-		final Vector3d gridLine = new Vector3d();
-		gridLine.sub(p1, p0);
-		final double[] coords = new double[3];
-		gridLine.get(coords);
-		double prevI = 0.0;
+		final double[] coordinates = new double[3];
+		final int dim2 = orthogonalDim(dim0, dim1);
+		final Vector3d normal = createNormal(dim2);
+		coordinates[dim2] = -0.5 * gridSize;
+		/*if (Math.random() > 0.5) {
+			normal.negate();
+			coordinates[dim2] = -coordinates[dim2];
+		}*/
 		for (double i = 0; i <= segments; i++) {
-			final double curI = i / segments * coords[dim1];
-			final double iCoord = weightedAverage(offset1, curI, prevI);
-			prevI = curI;
-			double prevJ = 0.0;
 			for (double j = 0; j <= segments; j++) {
-				final double curJ = j / segments * coords[dim0];
-				final double jCoord = weightedAverage(offset0, curJ, prevJ);
-				prevJ = curJ;
-				final Vector3d v = createSparseVector(planeDims, jCoord, iCoord);
-				v.add(planeShift);
-				v.add(p0);
-				samplingBuilder.add(new ValuePair<>(v, normal));
+				final double offset0 = 0; // Math.random();
+				final double offset1 = 0; // Math.random();
+				coordinates[dim0] = (j + offset0) / segments * gridSize - 0.5 *
+					gridSize;
+				coordinates[dim1] = (i + offset1) / segments * gridSize - 0.5 *
+					gridSize;
+				samplingBuilder.add(new ValuePair<>(new Vector3d(coordinates), normal));
 			}
 		}
 	}
 
-	public static double weightedAverage(final double weight, final double a,
-		final double b)
-	{
-		return weight * a + (1.0 - weight) * b;
+	private static Vector3d createNormal(final int dim2) {
+		final double[] n = new double[3];
+		n[dim2] = 1.0;
+		return new Vector3d(n);
 	}
 
-	public static Vector3d createSparseVector(int[] dims, double... values) {
-		final double[] coordinates = new double[3];
-		for (int i = 0; i < dims.length; i++) {
-			coordinates[dims[i]] = values[i];
-		}
-		return new Vector3d(coordinates);
+	private static int orthogonalDim(final int dim0, final int dim1) {
+		final Set<Integer> dims = new HashSet<>(Arrays.asList(0, 1, 2));
+		dims.remove(dim0);
+		dims.remove(dim1);
+		return dims.iterator().next();
 	}
 
-	public static boolean outOfBounds(final long[] coordinates,
+	public static boolean outOfBounds(final int[] coordinates,
 		final long[] bounds)
 	{
 		return (coordinates[0] < 0) || (coordinates[0] >= (bounds[0])) ||
@@ -164,14 +144,12 @@ public class CountInterfacesGrid {
 		return Math.sqrt(sumSquared);
 	}
 
-	public static long[] toVoxelCoordinates(final Vector3d v) {
-		final double[] coordinates = new double[3];
-		v.get(coordinates);
-		final long[] voxelCoordinates = new long[3];
-		for (int i = 0; i < 3; i++) {
-			voxelCoordinates[i] = (long) Math.floor(coordinates[i]);
-		}
-		return voxelCoordinates;
+	public static int[] toVoxelCoordinates(final Vector3d v) {
+		final int[] coordinates = new int[3];
+		coordinates[0] = (int) FastMath.floor(v.x);
+		coordinates[1] = (int) FastMath.floor(v.y);
+		coordinates[2] = (int) FastMath.floor(v.z);
+		return coordinates;
 	}
 
 	public static <C extends ComplexType<C>> void sample(
@@ -192,5 +170,41 @@ public class CountInterfacesGrid {
 		return samplers.flatMap(sampler -> DoubleStream.iterate(0.0, t -> t +
 			increment).mapToObj(t -> CountInterfacesGrid.samplePoint(sampler, t))
 			.limit(iterations));
+	}
+
+	public static ValuePair<Double, Double> findIntersections(
+		final ValuePair<Vector3d, Vector3d> sampler, final long[] bounds)
+	{
+		// Make min coordinates slightly negative to make vectors going parallel to
+		// stack planes intersect, e.g. origin (0, 0, 0) and direction (0, 0, 1)
+		final Vector3d origin = sampler.a;
+		final Vector3d direction = sampler.b;
+		final double minX = direction.x >= 0.0 ? 0 : bounds[0];
+		final double maxX = direction.x >= 0.0 ? bounds[0] : 0;
+		final double minY = direction.y >= 0.0 ? 0 : bounds[1];
+		final double maxY = direction.y >= 0.0 ? bounds[1] : 0;
+		final double minZ = direction.z >= 0.0 ? 0 : bounds[2];
+		final double maxZ = direction.z >= 0.0 ? bounds[2] : 0;
+		final double tX0 = (minX - origin.x) / direction.x;
+		final double tX1 = (maxX - origin.x) / direction.x;
+		final double tY0 = (minY - origin.y) / direction.y;
+		final double tY1 = (maxY - origin.y) / direction.y;
+		final double tZ0 = (minZ - origin.z) / direction.z;
+		final double tZ1 = (maxZ - origin.z) / direction.z;
+		if (tX0 > tY1 || tY0 > tX1) {
+			return null;
+		}
+		double tMin = Math.max(tX0, tY0);
+		double tMax = Math.min(tX1, tY1);
+		if (tMin > tZ1 || tZ0 > tMax) {
+			return null;
+		}
+		tMin = Math.max(tZ0, tMin);
+		tMax = Math.min(tZ1, tMax);
+		if (Double.isNaN(tMin) || Double.isNaN(tMax)) {
+			return null;
+		}
+
+		return new ValuePair<>(tMin, tMax);
 	}
 }

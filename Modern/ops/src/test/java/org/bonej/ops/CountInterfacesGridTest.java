@@ -3,22 +3,23 @@ package org.bonej.ops;
 
 import static org.bonej.ops.CountInterfacesGrid.findGridSize;
 import static org.bonej.ops.CountInterfacesGrid.findIntersections;
-import static org.bonej.ops.CountInterfacesGrid.outOfBounds;
-import static org.bonej.ops.CountInterfacesGrid.plotSamplers;
+import static org.bonej.ops.CountInterfacesGrid.plotGrid;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Random;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.stream.Stream;
 
-import net.imagej.ImageJ;
-import net.imagej.ImgPlus;
-import net.imagej.axis.Axes;
-import net.imagej.axis.DefaultLinearAxis;
 import net.imglib2.IterableInterval;
 import net.imglib2.RandomAccess;
 import net.imglib2.RandomAccessibleInterval;
-import net.imglib2.img.array.ArrayImg;
 import net.imglib2.img.array.ArrayImgs;
-import net.imglib2.img.basictypeaccess.array.FloatArray;
+import net.imglib2.type.logic.BitType;
+import net.imglib2.type.numeric.ComplexType;
 import net.imglib2.type.numeric.real.FloatType;
 import net.imglib2.util.ValuePair;
 import net.imglib2.view.Views;
@@ -33,133 +34,89 @@ import org.scijava.vecmath.Vector3d;
 public class CountInterfacesGridTest {
 
 	private static Random random = new Random(System.currentTimeMillis());
-	/*
-	public static void plotSampling(final RandomAccessibleInterval<IntType> stack,
-		final long[] bounds, final double gridSize, final long rotations)
-	{
-		final Stream<ValuePair<Vector3d, Vector3d>> samplers = Stream.generate(
-			() -> plotSamplers(gridSize, 100, bounds)).limit(rotations).flatMap(
-				s -> s);
-		final Stream<Vector3d> points = samplePoints(samplers, 1 / 2.3, gridSize);
-		points.map(CountInterfacesGrid::toVoxelCoordinates).filter(
-			c -> !outOfBounds(c, bounds)).forEach(c -> sample(stack, c));
-	}*/
 
-	/* Plot the average sampling direction */
-	public static long plotSamplingOrientation(final double[][][][] orientations,
-		final long[] bounds, final double gridSize, final long rotations)
+	public static <C extends ComplexType<C>> void futureParallel(
+			final RandomAccessibleInterval<C> interval, final long[] bounds,
+			final double gridSize, final long sections, final double increment,
+			final long rotations) throws ExecutionException, InterruptedException
 	{
+		final List<Future> futures = new ArrayList<>();
+		final int processors = 8;
+		final ExecutorService executors = Executors.newFixedThreadPool(processors);
+		final long limit = rotations / processors;
+		for (int i = 0; i < processors; i++) {
+			final Runnable runnable = () -> Stream.generate(() -> plotGrid(gridSize,
+					sections, bounds)).limit(limit).flatMap(s -> s).forEach(
+					sampler -> sampleVector(interval, sampler, increment, bounds));
+			final Future future = executors.submit(runnable);
+			futures.add(future);
+		}
 
-		final Stream<ValuePair<Vector3d, Vector3d>> samplers = Stream.generate(
-			() -> plotSamplers(gridSize, 100, bounds)).limit(rotations)
-			.flatMap(s -> s);
-		final double increment = 1;
-		samplers.forEach(sampler -> sampleVector(sampler, gridSize, increment,
-			orientations, bounds));
-		return 0; // samplers.count();
+		for (final Future future : futures) {
+			future.get();
+		}
+
+		executors.shutdown();
 	}
 
+	/* Plot the average sampling direction */
+	public static <C extends ComplexType<C>> void plotSamplingOrientation(
+		RandomAccessibleInterval<C> interval, final long[] bounds,
+		final double gridSize, final long rotations)
+	{
 
+		final Stream<ValuePair<Vector3d, Vector3d>> samplers = Stream.generate(
+			() -> plotGrid(gridSize, 100, bounds)).limit(rotations).flatMap(
+				s -> s);
+		final double increment = 1;
+		samplers.forEach(sampler -> sampleVector(interval, sampler, increment,
+			bounds));
+	}
 
-	private static void sampleVector(final ValuePair<Vector3d, Vector3d> sampler,
-		final double gridSize, final double increment,
-		final double[][][][] orientations, final long[] bounds)
+	private static <C extends ComplexType<C>> void sampleVector(
+		final RandomAccessibleInterval<C> interval,
+		final ValuePair<Vector3d, Vector3d> sampler, final double increment,
+		final long[] bounds)
 	{
 		final Vector3d origin = sampler.a;
 		final Vector3d direction = sampler.b;
 		final Vector3d jitter = new Vector3d(direction);
-		jitter.scale(Math.random());
+		final double jitterT = random.nextDouble() * increment;
+		jitter.scale(jitterT);
 		final ValuePair<Double, Double> tPair = findIntersections(sampler, bounds);
 		if (tPair == null) {
 			return;
 		}
-		// TODO find safe tMinMax and remove outOfBounds
-		double tMin = FastMath.min(tPair.a, tPair.b);
-		double tMax = FastMath.max(tPair.a, tPair.b);
-		if (Double.isNaN(tMin) || Double.isNaN(tMax)) {
-			return;
-		}
+		final double tMin = FastMath.min(tPair.a, tPair.b);
+		final double tMax = FastMath.max(tPair.a, tPair.b) - jitterT;
+		final Vector3d point = new Vector3d();
+		point.scaleAdd(tMin, direction, origin);
+		point.add(jitter);
+		final Vector3d bit = new Vector3d(direction);
+		bit.scale(increment);
+		final RandomAccess<C> access = interval.randomAccess();
 		for (double t = tMin; t <= tMax; t += increment) {
-			final Vector3d point = new Vector3d(direction);
-			point.scale(t);
-			point.add(origin);
-			point.add(jitter);
-			final int x = (int) FastMath.floor(point.x);
-			final int y = (int) FastMath.floor(point.y);
-			final int z = (int) FastMath.floor(point.z);
-			if (outOfBounds(x, y, z, bounds)) {
-				continue;
-			}
-			orientations[x][y][z][0] += direction.x;
-			orientations[x][y][z][1] += direction.y;
-			orientations[x][y][z][2] += direction.z;
+			addOrientation(access, point, direction);
+			point.add(bit);
 		}
 	}
 
-	private static double safeMin(final Vector3d origin, final Vector3d direction, final Vector3d jitter, final double tMin, final double tMax, final double increment, final long[] bounds) {
-		for (double t = tMin; t <= tMax; t += increment) {
-			final Vector3d point = new Vector3d(direction);
-			point.scale(t);
-			point.add(origin);
-			point.add(jitter);
-			final int x = (int) FastMath.floor(point.x);
-			final int y = (int) FastMath.floor(point.y);
-			final int z = (int) FastMath.floor(point.z);
-			if (x >= 0 && x < bounds[0] && y >= 0 && y < bounds[1] && z >= 0 && z < bounds[2]) {
-				return t;
-			}
-		}
-		return Double.NaN;
-	}
-
-	private static double safeMax(final Vector3d origin, final Vector3d direction, final Vector3d jitter, final double tMin, final double tMax, final double increment, final long[] bounds) {
-		for (double t = tMax; t >= tMin; t -= increment) {
-			final Vector3d point = new Vector3d(direction);
-			point.scale(t);
-			point.add(origin);
-			point.add(jitter);
-			final int x = (int) FastMath.floor(point.x);
-			final int y = (int) FastMath.floor(point.y);
-			final int z = (int) FastMath.floor(point.z);
-			if (x < bounds[0] && x >= 0 && y < bounds[1] && y >= 0 && z < bounds[2] && z >= 0) {
-				return t;
-			}
-		}
-		return Double.NaN;
-	}
-
-	private static long vectorIterations(final ValuePair<Double, Double> tPair, final double increment) {
-		return (long) FastMath.floor(FastMath.abs(tPair.b - tPair.a) / increment) + 1;
-	}
-
-	public static ImgPlus<FloatType> orientationsToImage(
-		final double[][][][] orientations, final long[] bounds)
+	private static <C extends ComplexType<C>> void addOrientation(
+		final RandomAccess<C> access, final Vector3d position,
+		final Vector3d orientation)
 	{
-		final ArrayImg<FloatType, FloatArray> ints = ArrayImgs.floats(bounds[0],
-			bounds[1], 3, bounds[2]);
-		final ImgPlus<FloatType> imgPlus = new ImgPlus<>(ints, "",
-			new DefaultLinearAxis(Axes.X), new DefaultLinearAxis(Axes.Y),
-			new DefaultLinearAxis(Axes.CHANNEL), new DefaultLinearAxis(Axes.Z));
-		final RandomAccess<FloatType> access = imgPlus.randomAccess();
-		for (int k = 0; k < bounds[2]; k++) {
-			access.setPosition(k, 3);
-			for (int j = 0; j < bounds[1]; j++) {
-				access.setPosition(j, 1);
-				for (int i = 0; i < bounds[0]; i++) {
-					access.setPosition(i, 0);
-					access.setPosition(0, 2);
-					access.get().set((float) orientations[i][j][k][0]);
-					access.setPosition(1, 2);
-					access.get().set((float) orientations[i][j][k][1]);
-					access.setPosition(2, 2);
-					access.get().set((float) orientations[i][j][k][2]);
-				}
-			}
-		}
-		return imgPlus;
+		access.setPosition((int) position.x, 0);
+		access.setPosition((int) position.y, 1);
+		access.setPosition((int) position.z, 3);
+		access.setPosition(0, 2);
+		access.get().setReal(access.get().getRealDouble() + orientation.x);
+		access.setPosition(1, 2);
+		access.get().setReal(access.get().getRealDouble() + orientation.y);
+		access.setPosition(2, 2);
+		access.get().setReal(access.get().getRealDouble() + orientation.z);
 	}
 
-	public static void printStatistics(
+	private static void printStatistics(
 		final RandomAccessibleInterval<FloatType> stack)
 	{
 		final IterableInterval<FloatType> iterable = Views.flatIterable(stack);
@@ -168,31 +125,29 @@ public class CountInterfacesGridTest {
 		System.out.println(statistics.toString());
 	}
 
-	public static void main(String... args) {
-		// final RandomAccessibleInterval<IntType> stack = ArrayImgs.ints(100, 100,
-		// 3, 100);
+	public static void main(String... args) throws ExecutionException, InterruptedException {
 		final int width = 100;
 		final int height = 100;
 		final int depth = 100;
+		final long rotations = 4;
 		final long[] bounds = { width, height, depth };
 		final double gridSize = findGridSize(bounds);
-		final long rotations = 1000;
-		final double[][][][] orientations = new double[width][height][depth][3];
+		//final Img<FloatType> img = ArrayImgs.floats(width, height, 3, depth);
+		// plotSamplingOrientation(img, bounds, gridSize, rotations);
 
+
+		final RandomAccessibleInterval<BitType> img = ArrayImgs.bits(width, height, depth);
 		long startTime = System.nanoTime();
-		long count = plotSamplingOrientation(orientations, bounds, gridSize,
-			rotations);
+		//futureParallel(img, bounds, gridSize, 100, 1.0, rotations);
+		final long sum = CountInterfacesGrid.futureParallel(img, bounds, gridSize, (long) gridSize, 1.0 / 2.3, rotations);
 		long endTime = System.nanoTime();
 		long durationMs = (endTime - startTime) / 1_000_000;
 		System.out.println("Duration A (ms) " + durationMs);
-		System.out.println("Samplers " + count);
-
-		final ImgPlus<FloatType> image = orientationsToImage(orientations, bounds);
-		final ImageJ imageJ = new ImageJ();
+		System.out.println("Intersections " + sum);
+		/*final ImgPlus<FloatType> image = new ImgPlus<>(img, "", new DefaultLinearAxis(Axes.X), new DefaultLinearAxis(Axes.Y), new DefaultLinearAxis(Axes.CHANNEL), new DefaultLinearAxis(Axes.Z));
 		printStatistics(image);
+		final ImageJ imageJ = new ImageJ();
 		imageJ.launch(args);
-		imageJ.ui().show(image);
-
+		imageJ.ui().show(image);*/
 	}
-
 }

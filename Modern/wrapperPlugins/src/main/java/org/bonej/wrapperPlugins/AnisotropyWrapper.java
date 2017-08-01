@@ -9,11 +9,9 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
 import java.util.stream.Collectors;
-import java.util.stream.IntStream;
 
 import net.imagej.ImgPlus;
 import net.imagej.axis.Axes;
-import net.imagej.axis.CalibratedAxis;
 import net.imagej.ops.OpService;
 import net.imagej.ops.special.function.BinaryFunctionOp;
 import net.imagej.ops.special.function.Functions;
@@ -22,7 +20,6 @@ import net.imglib2.type.NativeType;
 import net.imglib2.type.logic.BitType;
 import net.imglib2.type.numeric.RealType;
 
-import org.bonej.ops.CountInterfaces;
 import org.bonej.utilities.AxisUtils;
 import org.bonej.utilities.ElementUtil;
 import org.bonej.wrapperPlugins.wrapperUtils.Common;

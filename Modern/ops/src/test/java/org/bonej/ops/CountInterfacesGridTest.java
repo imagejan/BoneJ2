@@ -129,7 +129,7 @@ public class CountInterfacesGridTest {
 		final int width = 100;
 		final int height = 100;
 		final int depth = 100;
-		final long rotations = 4;
+		final int rotations = 1000;
 		final long[] bounds = { width, height, depth };
 		final double gridSize = findGridSize(bounds);
 		//final Img<FloatType> img = ArrayImgs.floats(width, height, 3, depth);
@@ -137,13 +137,21 @@ public class CountInterfacesGridTest {
 
 
 		final RandomAccessibleInterval<BitType> img = ArrayImgs.bits(width, height, depth);
-		long startTime = System.nanoTime();
-		//futureParallel(img, bounds, gridSize, 100, 1.0, rotations);
-		final long sum = CountInterfacesGrid.futureParallel(img, bounds, gridSize, (long) gridSize, 1.0 / 2.3, rotations);
-		long endTime = System.nanoTime();
-		long durationMs = (endTime - startTime) / 1_000_000;
-		System.out.println("Duration A (ms) " + durationMs);
-		System.out.println("Intersections " + sum);
+		final int iterations = 25;
+		long totalTime = 0;
+		for (int i = 0; i < iterations; i++) {
+			long startTime = System.nanoTime();
+			final long sum = CountInterfacesGrid.futureParallel(img, bounds, gridSize, (long) gridSize, 1.0 / 2.3, rotations);
+			long endTime = System.nanoTime();
+			final long duration = endTime - startTime;
+			totalTime += duration;
+			long durationMs = duration / 1_000_000;
+			System.out.println("Duration A (ms) " + durationMs);
+			System.out.println("Intersections " + sum);
+		}
+		long totalMs = totalTime / 1_000_000;
+		System.out.println("Total time " + totalMs + ", Avg. " + totalMs / iterations);
+
 		/*final ImgPlus<FloatType> image = new ImgPlus<>(img, "", new DefaultLinearAxis(Axes.X), new DefaultLinearAxis(Axes.Y), new DefaultLinearAxis(Axes.CHANNEL), new DefaultLinearAxis(Axes.Z));
 		printStatistics(image);
 		final ImageJ imageJ = new ImageJ();

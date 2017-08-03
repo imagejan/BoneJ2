@@ -1,6 +1,10 @@
 
 package org.bonej.ops;
 
+import static org.bonej.ops.CountInterfacesGrid.SamplingPlane.Orientation.XY;
+import static org.bonej.ops.CountInterfacesGrid.SamplingPlane.Orientation.XZ;
+import static org.bonej.ops.CountInterfacesGrid.SamplingPlane.Orientation.YZ;
+
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -9,7 +13,6 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
-import java.util.function.Function;
 import java.util.stream.Stream;
 import java.util.stream.Stream.Builder;
 
@@ -77,10 +80,11 @@ public class CountInterfacesGrid {
 		long previous = getElement(access, point, coordinates);
 		long intersections = 0;
 		for (double t = tMin; t <= tMax; t += increment) {
-			final long current = getElement(access, point, coordinates);
+			/*final long current = getElement(access, point, coordinates);
 			intersections += current ^ previous;
 			point.add(bit);
-			previous = current;
+			previous = current;*/
+			intersections++;
 		}
 		return intersections;
 	}
@@ -100,19 +104,22 @@ public class CountInterfacesGrid {
 	public static <B extends BooleanType<B>> long futureParallel(
 		final RandomAccessibleInterval<B> interval, final long[] bounds,
 		final double gridSize, final long sections, final double increment,
-		final long rotations) throws ExecutionException, InterruptedException
+		final int rotations) throws ExecutionException, InterruptedException
 	{
-		final int processors = (int) FastMath.min(5, rotations);
+		final int processors = 5;
 		final ExecutorService executors = Executors.newFixedThreadPool(processors);
-		final long taskRotations = rotations / processors;
-		final List<Future<Long>> futures = new ArrayList<>(processors);
-		final Function<ValuePair<Vector3d, Vector3d>, Long> sampling = (
-			sampler) -> sample(interval, bounds, sampler, increment);
-		for (int i = 0; i < processors; i++) {
-			final Stream<ValuePair<Vector3d, Vector3d>> samplers = plotGrids(
-				taskRotations, gridSize, sections, bounds);
+		final List<Future<Long>> futures = new ArrayList<>();
+		final Vector3d centroid = new Vector3d(bounds[0], bounds[1], bounds[2]);
+		centroid.scale(0.5);
+		final long points = (sections + 1) * (sections + 1);
+		for (int i = 0; i < rotations; i++) {
+			final double[] quaternion = generator.nextVector();
+			final SamplingGrid grid = new SamplingGrid(gridSize, quaternion,
+				centroid);
+			final Stream<ValuePair<Vector3d, Vector3d>> samplers = grid.getSamplers(
+				points);
 			final Future<Long> future = executors.submit(() -> samplers.mapToLong(
-				sampling::apply).sum());
+				sampler -> sample(interval, bounds, sampler, increment)).sum());
 			futures.add(future);
 		}
 
@@ -125,12 +132,90 @@ public class CountInterfacesGrid {
 		return total;
 	}
 
-	public static Stream<ValuePair<Vector3d, Vector3d>> plotGrids(
-		final long rotations, final double gridSize, final long sections,
-		final long[] bounds)
-	{
-		return Stream.generate(() -> plotGrid(gridSize, sections, bounds)).limit(
-			rotations).flatMap(s -> s);
+	private static final class SamplingGrid {
+
+		public final SamplingPlane xy;
+		public final SamplingPlane xz;
+		public final SamplingPlane yz;
+
+		public SamplingGrid(final double gridSize, final double[] quaternion,
+			final Tuple3d centroid)
+		{
+			xy = new SamplingPlane(gridSize, XY, quaternion, centroid);
+			xz = new SamplingPlane(gridSize, XZ, quaternion, centroid);
+			yz = new SamplingPlane(gridSize, YZ, quaternion, centroid);
+		}
+
+		private Stream<ValuePair<Vector3d, Vector3d>> getSamplers(final long n) {
+			final Stream.Builder<ValuePair<Vector3d, Vector3d>> builder = Stream
+				.builder();
+			for (long i = 0; i < n; i++) {
+				builder.accept(xy.getSampler());
+				builder.accept(xz.getSampler());
+				builder.accept(yz.getSampler());
+			}
+			return builder.build();
+		}
+	}
+
+	public static final class SamplingPlane {
+
+		public enum Orientation {
+				XY, XZ, YZ
+		}
+
+		public final Vector3d translation;
+		public final Vector3d u;
+		public final Vector3d v;
+		public final Vector3d normal;
+
+		// TODO Fix sign
+		public SamplingPlane(final double gridSize, final Orientation orientation,
+			final double[] quaternion, final Tuple3d centroid)
+		{
+			final int direction = random.nextBoolean() ? 1 : -1;
+			final double halfGrid = -0.5 * gridSize;
+			final double planeShift = direction * halfGrid;
+			if (orientation == XY) {
+				u = new Vector3d(gridSize, 0, 0);
+				v = new Vector3d(0, gridSize, 0);
+				normal = new Vector3d(0, 0, direction);
+				translation = new Vector3d(halfGrid, halfGrid, planeShift);
+			}
+			else if (orientation == XZ) {
+				u = new Vector3d(gridSize, 0, 0);
+				normal = new Vector3d(0, direction, 0);
+				v = new Vector3d(0, 0, gridSize);
+				translation = new Vector3d(halfGrid, planeShift, halfGrid);
+			}
+			else {
+				normal = new Vector3d(direction, 0, 0);
+				u = new Vector3d(0, gridSize, 0);
+				v = new Vector3d(0, 0, gridSize);
+				translation = new Vector3d(planeShift, halfGrid, halfGrid);
+			}
+
+			rotateVectors(quaternion);
+			translation.add(centroid);
+		}
+
+		private void rotateVectors(final double[] quaternion) {
+			rotate(translation, quaternion);
+			rotate(u, quaternion);
+			rotate(v, quaternion);
+			rotate(normal, quaternion);
+		}
+
+		public ValuePair<Vector3d, Vector3d> getSampler() {
+			final double uScale = random.nextDouble();
+			final double vScale = random.nextDouble();
+			final double x = uScale * u.x + vScale * v.x;
+			final double y = uScale * u.y + vScale * v.y;
+			final double z = uScale * u.z + vScale * v.z;
+			final Vector3d origin = new Vector3d(x, y, z);
+			origin.add(translation);
+			return new ValuePair<>(origin, normal);
+		}
 	}
 
 	public static Stream<ValuePair<Vector3d, Vector3d>> plotGrid(

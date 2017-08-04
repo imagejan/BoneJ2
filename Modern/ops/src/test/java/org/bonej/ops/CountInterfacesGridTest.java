@@ -153,6 +153,7 @@ public class CountInterfacesGridTest {
 
 		/*final ImgPlus<FloatType> image = new ImgPlus<>(img, "", new DefaultLinearAxis(Axes.X), new DefaultLinearAxis(Axes.Y), new DefaultLinearAxis(Axes.CHANNEL), new DefaultLinearAxis(Axes.Z));
 		printStatistics(image);
+		//TODO Probably explodes
 		final ImageJ imageJ = new ImageJ();
 		imageJ.launch(args);
 		imageJ.ui().show(image);*/

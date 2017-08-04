@@ -169,13 +169,6 @@
             <artifactId>ij</artifactId>
             <scope>test</scope>
         </dependency>
-        <dependency>
-            <!-- Don't remove, runnable MIL tests will explode -->
-            <groupId>net.imagej</groupId>
-            <artifactId>imagej-legacy</artifactId>
-            <scope>test</scope>
-            <optional>true</optional>
-        </dependency>
     </dependencies>
 
     <properties>

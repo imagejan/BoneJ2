@@ -80,11 +80,10 @@ public class CountInterfacesGrid {
 		long previous = getElement(access, point, coordinates);
 		long intersections = 0;
 		for (double t = tMin; t <= tMax; t += increment) {
-			/*final long current = getElement(access, point, coordinates);
+			final long current = getElement(access, point, coordinates);
 			intersections += current ^ previous;
 			point.add(bit);
-			previous = current;*/
-			intersections++;
+			previous = current;
 		}
 		return intersections;
 	}
@@ -164,10 +163,10 @@ public class CountInterfacesGrid {
 				XY, XZ, YZ
 		}
 
-		public final Vector3d translation;
-		public final Vector3d u;
-		public final Vector3d v;
-		public final Vector3d normal;
+		private final Vector3d translation;
+		private final Vector3d u;
+		private final Vector3d v;
+		private final Vector3d normal;
 
 		// TODO Fix sign
 		public SamplingPlane(final double gridSize, final Orientation orientation,
@@ -188,22 +187,17 @@ public class CountInterfacesGrid {
 				v = new Vector3d(0, 0, gridSize);
 				translation = new Vector3d(halfGrid, planeShift, halfGrid);
 			}
-			else {
+			else if (orientation == YZ) {
 				normal = new Vector3d(direction, 0, 0);
 				u = new Vector3d(0, gridSize, 0);
 				v = new Vector3d(0, 0, gridSize);
 				translation = new Vector3d(planeShift, halfGrid, halfGrid);
+			} else {
+				throw new IllegalArgumentException("Unexpected orientation");
 			}
 
 			rotateVectors(quaternion);
 			translation.add(centroid);
-		}
-
-		private void rotateVectors(final double[] quaternion) {
-			rotate(translation, quaternion);
-			rotate(u, quaternion);
-			rotate(v, quaternion);
-			rotate(normal, quaternion);
 		}
 
 		public ValuePair<Vector3d, Vector3d> getSampler() {
@@ -215,6 +209,13 @@ public class CountInterfacesGrid {
 			final Vector3d origin = new Vector3d(x, y, z);
 			origin.add(translation);
 			return new ValuePair<>(origin, normal);
+		}
+
+		private void rotateVectors(final double[] quaternion) {
+			rotate(translation, quaternion);
+			rotate(u, quaternion);
+			rotate(v, quaternion);
+			rotate(normal, quaternion);
 		}
 	}
 

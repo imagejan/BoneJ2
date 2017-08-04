@@ -25,7 +25,6 @@ import net.imglib2.util.ValuePair;
 import net.imglib2.view.Views;
 
 import org.apache.commons.math3.stat.descriptive.SummaryStatistics;
-import org.apache.commons.math3.util.FastMath;
 import org.scijava.vecmath.Vector3d;
 
 /**
@@ -87,8 +86,8 @@ public class CountInterfacesGridTest {
 		if (tPair == null) {
 			return;
 		}
-		final double tMin = FastMath.min(tPair.a, tPair.b);
-		final double tMax = FastMath.max(tPair.a, tPair.b) - jitterT;
+		final double tMin = Math.min(tPair.a, tPair.b);
+		final double tMax = Math.max(tPair.a, tPair.b) - jitterT;
 		final Vector3d point = new Vector3d();
 		point.scaleAdd(tMin, direction, origin);
 		point.add(jitter);

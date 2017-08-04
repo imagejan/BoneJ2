@@ -14,6 +14,7 @@ import java.util.stream.Stream;
 
 import net.imagej.ops.AbstractOp;
 import net.imagej.ops.Op;
+import net.imagej.ops.special.function.AbstractUnaryFunctionOp;
 import net.imglib2.RandomAccess;
 import net.imglib2.RandomAccessibleInterval;
 import net.imglib2.type.BooleanType;
@@ -36,31 +37,29 @@ import org.scijava.vecmath.Vector3d;
 // TODO Implement for 2D
 // TODO implements Contingent
 @Plugin(type = Op.class)
-public class MeanInterceptLengths<B extends BooleanType<B>> extends AbstractOp {
+public class MeanInterceptLengths<B extends BooleanType<B>> extends AbstractUnaryFunctionOp<RandomAccessibleInterval<B>, Collection<Tuple3d>> {
 
 	private static final Random random = new Random();
 
-	@Parameter
-	private RandomAccessibleInterval<B> interval;
-
 	/** Number of sampling vectors on each plane */
-	@Parameter
-	private long vectors;
+	@Parameter(required = false)
+	private Long vectors = null;
 
 	/** Increment added to the scalar value t used to scale sampling vectors */
 	@Parameter(required = false)
-	private double tIncrement = 1.0;
-
-	@Parameter(type = ItemIO.OUTPUT)
-	private Collection<Tuple3d> milVectors;
+	private double tIncrement = 1.0 / 2.3;
 
 	@Parameter(type = ItemIO.BOTH, required = false)
 	private Quat4d rotation = null;
 
 	@Override
-	public void run() {
+	public Collection<Tuple3d> calculate(final RandomAccessibleInterval<B> interval) {
 		final long[] bounds = findBounds(interval);
 		final double gridSize = findGridSize(bounds);
+		if (vectors == null) {
+			vectors = Arrays.stream(bounds).max().orElse(0) + 1;
+			vectors *= vectors;
+		}
 		if (rotation == null) {
 			// TODO Test how ItemIO.BOTH works
 			rotation = nextQuaternion();
@@ -68,9 +67,9 @@ public class MeanInterceptLengths<B extends BooleanType<B>> extends AbstractOp {
 		final Vector3d centroid = findCentroid(bounds);
 		final SamplingGrid grid = new SamplingGrid(gridSize, rotation, centroid);
 		final Stream<ValuePair<Vector3d, Vector3d>> samplers = grid.getSamplers(
-			vectors);
-		milVectors = samplers.map(sampler -> sample(interval, bounds, sampler,
-			tIncrement)).filter(Objects::nonNull).collect(Collectors.toList());
+				vectors);
+		return samplers.map(sampler -> sample(interval, bounds, sampler,
+				tIncrement)).filter(Objects::nonNull).collect(Collectors.toList());
 	}
 
 	public static Vector3d findCentroid(final long[] bounds) {
@@ -98,7 +97,7 @@ public class MeanInterceptLengths<B extends BooleanType<B>> extends AbstractOp {
 		if (tPair == null) {
 			return null;
 		}
-		final double jitterT = Math.random() * increment;
+		final double jitterT = random.nextDouble() * increment;
 		final double tMin = Math.min(tPair.a, tPair.b);
 		final double tMax = Math.max(tPair.a, tPair.b) - jitterT;
 		if (tMin > tMax) {

@@ -93,6 +93,7 @@ public class MeanInterceptLengths<B extends BooleanType<B>> extends AbstractUnar
 		final RandomAccessibleInterval<B> interval, final long[] bounds,
 		final ValuePair<Vector3d, Vector3d> sampler, final double increment)
 	{
+		// TODO Refactor to findMILVector(sampler) { intersections = intersections ... return milVector;}
 		final ValuePair<Double, Double> tPair = findIntersections(sampler, bounds);
 		if (tPair == null) {
 			return null;

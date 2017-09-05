@@ -12,7 +12,6 @@ import java.util.Random;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
-import net.imagej.ops.AbstractOp;
 import net.imagej.ops.Op;
 import net.imagej.ops.special.function.AbstractUnaryFunctionOp;
 import net.imglib2.RandomAccess;
@@ -36,8 +35,11 @@ import org.scijava.vecmath.Vector3d;
  */
 // TODO Implement for 2D
 // TODO implements Contingent
+// TODO Use RealVector
 @Plugin(type = Op.class)
-public class MeanInterceptLengths<B extends BooleanType<B>> extends AbstractUnaryFunctionOp<RandomAccessibleInterval<B>, Collection<Tuple3d>> {
+public class MeanInterceptLengths<B extends BooleanType<B>> extends
+	AbstractUnaryFunctionOp<RandomAccessibleInterval<B>, Collection<Tuple3d>>
+{
 
 	private static final Random random = new Random();
 
@@ -53,7 +55,9 @@ public class MeanInterceptLengths<B extends BooleanType<B>> extends AbstractUnar
 	private Quat4d rotation = null;
 
 	@Override
-	public Collection<Tuple3d> calculate(final RandomAccessibleInterval<B> interval) {
+	public Collection<Tuple3d> calculate(
+		final RandomAccessibleInterval<B> interval)
+	{
 		final long[] bounds = findBounds(interval);
 		final double gridSize = findGridSize(bounds);
 		if (vectors == null) {
@@ -67,13 +71,9 @@ public class MeanInterceptLengths<B extends BooleanType<B>> extends AbstractUnar
 		final Vector3d centroid = findCentroid(bounds);
 		final SamplingGrid grid = new SamplingGrid(gridSize, rotation, centroid);
 		final Stream<ValuePair<Vector3d, Vector3d>> samplers = grid.getSamplers(
-				vectors);
+			vectors);
 		return samplers.map(sampler -> sample(interval, bounds, sampler,
-				tIncrement)).filter(Objects::nonNull).collect(Collectors.toList());
-	}
-
-	public static Vector3d findCentroid(final long[] bounds) {
-		return new Vector3d(bounds[0] * 0.5, bounds[1] * 0.5, bounds[2] * 0.5);
+			tIncrement)).filter(Objects::nonNull).collect(Collectors.toList());
 	}
 
 	public static <C extends NumericType<C>> long[] findBounds(
@@ -84,62 +84,7 @@ public class MeanInterceptLengths<B extends BooleanType<B>> extends AbstractUnar
 		return bounds;
 	}
 
-	public static double findGridSize(final long[] bounds) {
-		final long sumSquared = Arrays.stream(bounds).map(i -> i * i).sum();
-		return Math.sqrt(sumSquared);
-	}
-
-	public static <B extends BooleanType<B>> Vector3d sample(
-		final RandomAccessibleInterval<B> interval, final long[] bounds,
-		final ValuePair<Vector3d, Vector3d> sampler, final double increment)
-	{
-		// TODO Refactor to findMILVector(sampler) { intersections = intersections ... return milVector;}
-		final ValuePair<Double, Double> tPair = findIntersections(sampler, bounds);
-		if (tPair == null) {
-			return null;
-		}
-		final double jitterT = random.nextDouble() * increment;
-		final double tMin = Math.min(tPair.a, tPair.b);
-		final double tMax = Math.max(tPair.a, tPair.b) - jitterT;
-		if (tMin > tMax) {
-			// interval fits (at most) one sampling point. no intersections
-			return null;
-		}
-		final Vector3d origin = sampler.a;
-		final Vector3d direction = sampler.b;
-		final Vector3d jitter = new Vector3d(direction);
-		jitter.scale(jitterT);
-		final Vector3d point = new Vector3d();
-		point.scaleAdd(tMin, direction, origin);
-		point.add(jitter);
-		final Vector3d bit = new Vector3d(direction);
-		bit.scale(increment);
-		final RandomAccess<B> access = interval.randomAccess();
-		long previous = getElement(access, point);
-		long intersections = 0;
-		for (double t = tMin; t <= tMax; t += increment) {
-			final long current = getElement(access, point);
-			intersections += current ^ previous;
-			point.add(bit);
-			previous = current;
-		}
-		return toMILVector(direction, tPair, intersections);
-	}
-
-	public static Vector3d toMILVector(
-		final Vector3d direction,
-		final ValuePair<Double, Double> tPair, final long intersections)
-	{
-		if (intersections == 0) {
-			return direction;
-		}
-		final double t = Math.abs(tPair.a - tPair.b) / intersections;
-		final Vector3d milVector = new Vector3d(direction);
-		milVector.scale(t);
-		return milVector;
-	}
-
-	public static ValuePair<Double, Double> findIntersections(
+	public static ValuePair<Double, Double> findBoxIntersections(
 		final ValuePair<Vector3d, Vector3d> sampler, final long[] bounds)
 	{
 		final Vector3d origin = sampler.a;
@@ -176,6 +121,24 @@ public class MeanInterceptLengths<B extends BooleanType<B>> extends AbstractUnar
 		return new ValuePair<>(tMin, tMax);
 	}
 
+	public static Vector3d findCentroid(final long[] bounds) {
+		return new Vector3d(bounds[0] * 0.5, bounds[1] * 0.5, bounds[2] * 0.5);
+	}
+
+	public static double findGridSize(final long[] bounds) {
+		final long sumSquared = Arrays.stream(bounds).map(i -> i * i).sum();
+		return Math.sqrt(sumSquared);
+	}
+
+	public static <B extends BooleanType<B>> long getElement(
+		final RandomAccess<B> access, final Vector3d position)
+	{
+		access.setPosition((int) position.x, 0);
+		access.setPosition((int) position.y, 1);
+		access.setPosition((int) position.z, 2);
+		return (long) access.get().getRealDouble();
+	}
+
 	public static double maxNan(final double a, final double b) {
 		if (Double.isNaN(a) && Double.isNaN(b)) {
 			return Double.NaN;
@@ -186,9 +149,7 @@ public class MeanInterceptLengths<B extends BooleanType<B>> extends AbstractUnar
 		else if (Double.isNaN(b)) {
 			return a;
 		}
-		else {
-			return Math.max(a, b);
-		}
+		return Math.max(a, b);
 	}
 
 	public static double minNan(final double a, final double b) {
@@ -201,18 +162,58 @@ public class MeanInterceptLengths<B extends BooleanType<B>> extends AbstractUnar
 		else if (Double.isNaN(b)) {
 			return a;
 		}
-		else {
-			return Math.min(a, b);
-		}
+		return Math.min(a, b);
 	}
 
-	public static <B extends BooleanType<B>> long getElement(
-		final RandomAccess<B> access, final Vector3d position)
+	public static <B extends BooleanType<B>> Vector3d sample(
+		final RandomAccessibleInterval<B> interval, final long[] stack,
+		final ValuePair<Vector3d, Vector3d> sampler, final double increment)
 	{
-		access.setPosition((int) position.x, 0);
-		access.setPosition((int) position.y, 1);
-		access.setPosition((int) position.z, 2);
-		return (long) access.get().getRealDouble();
+		// TODO Refactor to findMILVector(sampler) { intersections = interfaces
+		// ... return milVector;}
+		final ValuePair<Double, Double> tPair = findBoxIntersections(sampler,
+			stack);
+		if (tPair == null) {
+			return null;
+		}
+		final double jitterT = random.nextDouble() * increment;
+		final double tMin = Math.min(tPair.a, tPair.b);
+		final double tMax = Math.max(tPair.a, tPair.b) - jitterT;
+		if (tMin > tMax) {
+			// interval fits (at most) one sampling point. no intersections
+			return null;
+		}
+		final Vector3d origin = sampler.a;
+		final Vector3d direction = sampler.b;
+		final Vector3d jitter = new Vector3d(direction);
+		jitter.scale(jitterT);
+		final Vector3d point = new Vector3d();
+		point.scaleAdd(tMin, direction, origin);
+		point.add(jitter);
+		final Vector3d bit = new Vector3d(direction);
+		bit.scale(increment);
+		final RandomAccess<B> access = interval.randomAccess();
+		long previous = getElement(access, point);
+		long interfaces = 0;
+		for (double t = tMin; t <= tMax; t += increment) {
+			final long current = getElement(access, point);
+			interfaces += current ^ previous;
+			point.add(bit);
+			previous = current;
+		}
+		return toMILVector(direction, tPair, interfaces);
+	}
+
+	public static Vector3d toMILVector(final Vector3d direction,
+		final ValuePair<Double, Double> tPair, final long intersections)
+	{
+		if (intersections == 0) {
+			return direction;
+		}
+		final double t = Math.abs(tPair.a - tPair.b) / intersections;
+		final Vector3d milVector = new Vector3d(direction);
+		milVector.scale(t);
+		return milVector;
 	}
 
 	// region -- Helper methods --
@@ -266,10 +267,6 @@ public class MeanInterceptLengths<B extends BooleanType<B>> extends AbstractUnar
 
 	public static final class SamplingPlane {
 
-		public enum Orientation {
-				XY, XZ, YZ
-		}
-
 		private final Vector3d translation;
 		private final Vector3d u;
 		private final Vector3d v;
@@ -307,19 +304,6 @@ public class MeanInterceptLengths<B extends BooleanType<B>> extends AbstractUnar
 			translation.add(centroid);
 		}
 
-		// TODO Op?
-		private static void rotate(final Vector3d v, final Quat4d q) {
-			final Quat4d p = new Quat4d();
-			final Quat4d qInv = new Quat4d();
-			final Quat4d rotated = new Quat4d(q);
-			p.set(v.x, v.y, v.z, 0.0);
-			rotated.mul(p);
-			// No need to divide q^-1 since q is a unit quaternion
-			qInv.set(-q.x, -q.y, -q.z, q.w);
-			rotated.mul(qInv);
-			v.set(rotated.x, rotated.y, rotated.z);
-		}
-
 		private ValuePair<Vector3d, Vector3d> getSampler() {
 			final double uScale = random.nextDouble();
 			final double vScale = random.nextDouble();
@@ -331,11 +315,28 @@ public class MeanInterceptLengths<B extends BooleanType<B>> extends AbstractUnar
 			return new ValuePair<>(origin, normal);
 		}
 
+		// TODO Op?
+		private static void rotate(final Vector3d v, final Quat4d q) {
+			final Quat4d p = new Quat4d();
+			final Quat4d qInv = new Quat4d();
+			final Quat4d rotated = new Quat4d(q);
+			p.set(v.x, v.y, v.z, 0.0);
+			rotated.mul(p);
+			// No need to divide by the inverse of q since it's a unit quaternion
+			qInv.set(-q.x, -q.y, -q.z, q.w);
+			rotated.mul(qInv);
+			v.set(rotated.x, rotated.y, rotated.z);
+		}
+
 		private void rotateVectors(final Quat4d quaternion) {
 			rotate(translation, quaternion);
 			rotate(u, quaternion);
 			rotate(v, quaternion);
 			rotate(normal, quaternion);
+		}
+
+		public enum Orientation {
+				XY, XZ, YZ
 		}
 	}
 	// endregion

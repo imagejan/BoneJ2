@@ -6,6 +6,7 @@ import java.util.Collection;
 import java.util.function.Function;
 
 import net.imagej.ops.Contingent;
+import net.imagej.ops.Op;
 import net.imagej.ops.special.function.AbstractUnaryFunctionOp;
 
 import org.apache.commons.math3.geometry.euclidean.threed.Vector3D;
@@ -15,39 +16,62 @@ import org.apache.commons.math3.linear.EigenDecomposition;
 import org.apache.commons.math3.linear.MatrixUtils;
 import org.apache.commons.math3.linear.RealMatrix;
 import org.apache.commons.math3.linear.RealVector;
+import org.apache.commons.math3.linear.SingularValueDecomposition;
 import org.apache.commons.math3.util.FastMath;
+import org.scijava.plugin.Plugin;
 
 /**
  * @author Richard Domander
  */
 // TODO Contact Kaleb for licensing etc.
 // TODO check calculations
+@Plugin(type = Op.class)
 public class FitEllipsoid extends
 	AbstractUnaryFunctionOp<Collection<Vector3D>, FitEllipsoid.Solution>
 	implements Contingent
 {
 
-	private static final int SURFACE_TERMS = 9;
+	/**
+	 * Number of terms in the surface polynomial that needs to be solved.
+	 * <p>
+	 * Due the number of terms, we also need at least 9 points in the input to
+	 * solve the equation.
+	 * </p>
+	 * 
+	 * @see #solveSurface(Collection)
+	 */
+	public static final int SURFACE_TERMS = 9;
 
 	@Override
 	public Solution calculate(final Collection<Vector3D> points) {
 		final RealVector polynomial = solveSurface(points);
-		final RealMatrix matrix = toAlgebraicMatrix(polynomial);
-		return new Solution(matrix);
+		final RealMatrix surface = toAlgebraicMatrix(polynomial);
+		final RealVector centre = solveCentre(surface);
+		final RealMatrix translatedSurface = translateToCentre(surface, centre);
+		final EigenDecomposition eigenDecomposition = solveEigenvectors(
+			translatedSurface);
+		final double[] eigenvalues = eigenDecomposition.getRealEigenvalues();
+		final double[] radii = Arrays.stream(eigenvalues).map(
+			FitEllipsoid::toRadius).toArray();
+		final boolean isEllipsoid = isEllipsoid(eigenvalues);
+		return new Solution(surface, centre, eigenDecomposition, radii,
+			isEllipsoid);
 	}
 
 	@Override
 	public boolean conforms() {
-		// Need at least nine data points to do a fitting
 		return in().size() >= SURFACE_TERMS;
 	}
+
+	// region -- Helper methods --
 
 	/**
 	 * Creates a design matrix out of a collection of points.
 	 * <p>
-	 * The design matrix is used in the least squares fitting of a quadric surface
+	 * The design matrix is used in the least squares fitting of a quadric
+	 * surface.
 	 * </p>
-	 * 
+	 *
 	 * @see #solveSurface(Collection)
 	 * @param pointCloud points in a 3D space (size >= {@link #SURFACE_TERMS}).
 	 * @return a [n][9] matrix of real values.
@@ -72,6 +96,34 @@ public class FitEllipsoid extends
 		return new Array2DRowRealMatrix(data);
 	}
 
+	private static boolean isEllipsoid(final double[] eigenvalues) {
+		// the signs of the eigenvalues (diagonal elements of DD) determine the
+		// type. If they are all positive, it is an ellipsoid; two positive and
+		// one negative gives a hyperboloid of one sheet; one positive and two
+		// negative gives a hyperboloid of two sheets. If one or more eigenvalues
+		// vanish, we have a degenerate case such as a paraboloid,or a cylinder or
+		// even a pair of planes.
+		return Arrays.stream(eigenvalues).allMatch(x -> x > 0);
+	}
+
+	private static RealVector solveCentre(final RealMatrix quadricSurface) {
+		final RealMatrix subMatrix = quadricSurface.getSubMatrix(0, 2, 0, 2);
+		subMatrix.scalarMultiply(-1.0);
+		final RealMatrix subInverse = MatrixUtils.inverse(subMatrix);
+		final RealVector subVector = quadricSurface.getRowVector(3).getSubVector(0,
+			3);
+		return subInverse.operate(subVector);
+	}
+
+	private static EigenDecomposition solveEigenvectors(
+		final RealMatrix quadricSurface)
+	{
+		final RealMatrix eigenMatrix = quadricSurface.getSubMatrix(0, 2, 0, 2);
+		final double scalar = -1.0 / quadricSurface.getEntry(3, 3);
+		eigenMatrix.scalarMultiply(scalar);
+		return new EigenDecomposition(eigenMatrix);
+	}
+
 	/**
 	 * Solves the quadric surface that best fits the given points.
 	 * <p>
@@ -89,13 +141,14 @@ public class FitEllipsoid extends
 	{
 		final RealMatrix d = createDesignMatrix(pointCloud);
 		final RealMatrix dT = d.transpose();
-		final RealMatrix dTDInverse = MatrixUtils.inverse(dT.multiply(d));
+		// Don't use MatrixUtils.inverse - it may throw a SingularMatrixException
+		final RealMatrix dTDInverse = new SingularValueDecomposition(dT.multiply(d)).getSolver().getInverse();
 		final ArrayRealVector ones = new ArrayRealVector(pointCloud.size(), 1);
 		return dTDInverse.operate(dT.operate(ones));
 	}
 
 	/**
-	 * Creates a matrix out of a solution vector
+	 * Creates a matrix out of a solution vector.
 	 *
 	 * @see #solveSurface(Collection)
 	 * @return a matrix representing the polynomial solution vector in an
@@ -123,135 +176,120 @@ public class FitEllipsoid extends
 		// @formatter:on
 	}
 
+	private static double toRadius(final double eigenvalue) {
+		return FastMath.sqrt(1.0 / eigenvalue);
+	}
+
+	private static RealMatrix translateToCentre(final RealMatrix quadricSurface,
+		final RealVector centre)
+	{
+		final double x = centre.getEntry(0);
+		final double y = centre.getEntry(1);
+		final double z = centre.getEntry(2);
+		// @formatter:off
+		final Array2DRowRealMatrix t = new Array2DRowRealMatrix(new double[][]{
+				{1, 0, 0, x},
+				{0, 1, 0, y},
+				{0, 0, 1, z},
+				{0, 0, 0, 1}
+		});
+		// @formatter:on
+		return t.transpose().multiply(quadricSurface).multiply(t);
+	}
+	// endregion
+
+	// region -- Helper classes --
 	public static class Solution {
 
-		// TODO refactor logic into parent class
-		private final boolean isEllipsoid;
+		private final RealMatrix surface;
 		private final RealVector centre;
-		private final EigenDecomposition eigenDecomposition;
+		private final EigenDecomposition decomposition;
 		private final double[] radii;
+		private final boolean isEllipsoid;
 
-		private Solution(final RealMatrix quadricSurface) {
-			centre = solveCentre(quadricSurface);
-			final RealMatrix translatedSurface = translateToCentre(quadricSurface,
-				centre);
-			eigenDecomposition = solveEigenvectors(translatedSurface);
-			final double[] eigenvalues = eigenDecomposition.getRealEigenvalues();
-			radii = Arrays.stream(eigenvalues).map(Solution::toRadius).toArray();
-			isEllipsoid = isEllipsoid(eigenvalues);
+		private Solution(final RealMatrix surface, final RealVector centre,
+			final EigenDecomposition decomposition, final double[] radii,
+			final boolean isEllipsoid)
+		{
+			this.surface = surface;
+			this.centre = centre;
+			this.decomposition = decomposition;
+			this.radii = radii;
+			this.isEllipsoid = isEllipsoid;
 		}
 
 		/**
-		 * Gets the radius of the first axis of the ellipsoid
+		 * Gets the radius of the first axis of the ellipsoid.
 		 *
-		 * @return a real radius of the ellipsoid
+		 * @return a real radius of the ellipsoid.
 		 */
 		public double getA() {
 			return radii[0];
 		}
 
 		/**
-		 * Gets the radius of the second axis of the ellipsoid
+		 * Gets the radius of the second axis of the ellipsoid.
 		 *
-		 * @return a real radius of the ellipsoid
+		 * @return a real radius of the ellipsoid.
 		 */
 		public double getB() {
 			return radii[1];
 		}
 
 		/**
-		 * Gets the radius of the third axis of the ellipsoid
+		 * Gets the radius of the third axis of the ellipsoid.
 		 *
-		 * @return a real radius of the ellipsoid
+		 * @return a real radius of the ellipsoid.
 		 */
 		public double getC() {
 			return radii[2];
 		}
 
 		/**
-		 * Gets a copy of the centre of the ellipsoid
+		 * Gets a copy of the centre of the ellipsoid.
 		 *
-		 * @return A copy of the centre vector
+		 * @return A copy of the centre vector.
 		 */
 		public RealVector getCentre() {
 			return centre.copy();
 		}
 
 		/**
-		 * Gets a copy of eigenvalues of the ellipsoid surface
+		 * Gets a copy of eigenvalues of the ellipsoid surface.
 		 *
-		 * @return copy of the real parts of the eigenvalues
+		 * @return copy of the real parts of the eigenvalues.
 		 */
 		public double[] getEigenvalues() {
-			return eigenDecomposition.getRealEigenvalues();
+			return decomposition.getRealEigenvalues();
 		}
 
 		/**
-		 * Get a copy of the ith eigenvector of the ellipsoid surface
+		 * Get a copy of the ith eigenvector of the ellipsoid surface.
 		 *
-		 * @param i Index of the eigenvector
-		 * @return an eigenvector
+		 * @param i Index of the eigenvector.
+		 * @return an eigenvector.
 		 */
 		public RealVector getEigenvector(final int i) {
-			return eigenDecomposition.getEigenvector(i);
+			return decomposition.getEigenvector(i);
 		}
 
 		/**
-		 * Check whether the solved quadric surface is an ellipsoid
+		 * Gets the algebraic form of the ellipsoid surface.
 		 *
-		 * @return true if the surface is an ellipsoid, false otherwise
+		 * @return matrix of the surface terms.
+		 */
+		public RealMatrix getSurface() {
+			return surface.copy();
+		}
+
+		/**
+		 * Check whether the solved quadric surface is an ellipsoid.
+		 *
+		 * @return true if the surface is an ellipsoid, false otherwise.
 		 */
 		public boolean isEllipsoid() {
 			return isEllipsoid;
 		}
-
-		private static boolean isEllipsoid(final double[] eigenvalues) {
-			// the signs of the eigenvalues (diagonal elements of DD) determine the
-			// type. If they are all positive, it is an ellipsoid; two positive and
-			// one negative gives a hyperboloid of one sheet; one positive and two
-			// negative gives a hyperboloid of two sheets. If one or more eigenvalues
-			// vanish, we have a degenerate case such as a paraboloid,or a cylinder or
-			// even a pair of planes.
-			return Arrays.stream(eigenvalues).allMatch(x -> x > 0);
-		}
-
-		private static RealVector solveCentre(final RealMatrix quadricSurface) {
-			final RealMatrix subMatrix = quadricSurface.getSubMatrix(0, 2, 0, 2);
-			subMatrix.scalarMultiply(-1.0);
-			final RealMatrix subInverse = MatrixUtils.inverse(subMatrix);
-			final RealVector subVector = quadricSurface.getRowVector(3).getSubVector(
-				0, 3);
-			return subInverse.operate(subVector);
-		}
-
-		private static EigenDecomposition solveEigenvectors(
-			final RealMatrix quadricSurface)
-		{
-			final RealMatrix eigenMatrix = quadricSurface.getSubMatrix(0, 2, 0, 2);
-			final double scalar = -1.0 / quadricSurface.getEntry(3, 3);
-			eigenMatrix.scalarMultiply(scalar);
-			return new EigenDecomposition(eigenMatrix);
-		}
-
-		private static double toRadius(final double eigenvalue) {
-			return FastMath.sqrt(1.0 / eigenvalue);
-		}
-
-		private static RealMatrix translateToCentre(final RealMatrix quadricSurface,
-			final RealVector centre)
-		{
-			final double x = centre.getEntry(0);
-			final double y = centre.getEntry(1);
-			final double z = centre.getEntry(2);
-			// @formatter:off
-			final Array2DRowRealMatrix t = new Array2DRowRealMatrix(new double[][]{
-					{1, 0, 0, x},
-					{0, 1, 0, y},
-					{0, 0, 1, z},
-					{0, 0, 0, 1}
-			});
-			// @formatter:on
-			return t.transpose().multiply(quadricSurface).multiply(t);
-		}
 	}
+	// endregion
 }

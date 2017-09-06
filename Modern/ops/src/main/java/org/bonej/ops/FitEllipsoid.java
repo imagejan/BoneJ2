@@ -3,7 +3,10 @@ package org.bonej.ops;
 
 import java.util.Arrays;
 import java.util.Collection;
+import java.util.List;
 import java.util.function.Function;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 import net.imagej.ops.Contingent;
 import net.imagej.ops.Op;
@@ -96,6 +99,42 @@ public class FitEllipsoid extends
 		return new Array2DRowRealMatrix(data);
 	}
 
+	private static RealMatrix createDesignMatrix2(final Collection<Vector3D> points) {
+		final double[][] data = points.stream().map(p -> {
+			double xx = Math.pow(p.getX(), 2);
+			double yy = Math.pow(p.getY(), 2);
+			double zz = Math.pow(p.getZ(), 2);
+			double xy = 2 * (p.getX() * p.getY());
+			double xz = 2 * (p.getX() * p.getZ());
+			double yz = 2 * (p.getY() * p.getZ());
+			double x = 2 * p.getX();
+			double y = 2 * p.getY();
+			double z = 2 * p.getZ();
+			return new double[]{xx, yy, zz, xy, xz, yz, x, y, z};
+		}).toArray(double[][]::new);
+		return new Array2DRowRealMatrix(data);
+	}
+
+	private static RealVector solveSurface2(RealMatrix d) {
+		// Multiply: d' * d
+		RealMatrix dtd = d.transpose().multiply(d);
+
+		// Create a vector of ones.
+		RealVector ones = new ArrayRealVector(d.getRowDimension());
+		ones.mapAddToSelf(1);
+
+		// Multiply: d' * ones.mapAddToSelf(1)
+		RealVector dtOnes = d.transpose().operate(ones);
+
+		// Find ( d' * d )^-1
+		RealMatrix dtdi = new SingularValueDecomposition(dtd)
+				.getSolver().getInverse();
+
+		// v = (( d' * d )^-1) * ( d' * ones.mapAddToSelf(1));
+
+		return dtdi.operate(dtOnes);
+	}
+
 	private static boolean isEllipsoid(final double[] eigenvalues) {
 		// the signs of the eigenvalues (diagonal elements of DD) determine the
 		// type. If they are all positive, it is an ellipsoid; two positive and
@@ -107,12 +146,12 @@ public class FitEllipsoid extends
 	}
 
 	private static RealVector solveCentre(final RealMatrix quadricSurface) {
-		final RealMatrix subMatrix = quadricSurface.getSubMatrix(0, 2, 0, 2);
-		subMatrix.scalarMultiply(-1.0);
+		final RealMatrix subMatrix = quadricSurface.getSubMatrix(0, 2, 0, 2).scalarMultiply(-1.0);
 		final RealMatrix subInverse = MatrixUtils.inverse(subMatrix);
-		final RealVector subVector = quadricSurface.getRowVector(3).getSubVector(0,
+		// The {x,y,z} translation (from origin) part of the matrix
+		final RealVector translation = quadricSurface.getRowVector(3).getSubVector(0,
 			3);
-		return subInverse.operate(subVector);
+		return subInverse.operate(translation);
 	}
 
 	private static EigenDecomposition solveEigenvectors(
@@ -197,6 +236,26 @@ public class FitEllipsoid extends
 		return t.transpose().multiply(quadricSurface).multiply(t);
 	}
 	// endregion
+
+	public static void main(String... args) {
+		final double a = 1;
+		final double b = 2;
+		final double c = 3;
+		final Vector3D centre = new Vector3D(1, 1, 1);
+		final List<Vector3D> ellipsoid = Stream.of(
+				new Vector3D(0, 0, 0),
+				new Vector3D(1 + a, 1, 1),
+				new Vector3D(1 - a, 1, 1),
+				new Vector3D(1, 1 + b, 1),
+				new Vector3D(1, 1 - b, 1),
+				new Vector3D(1, 1, 1 + c),
+				new Vector3D(1, 1, 1 - c)
+		).map(v -> v.add(centre)).collect(Collectors.toList());
+		final RealVector surface = FitEllipsoid.solveSurface(ellipsoid);
+		final RealMatrix designMatrix2 = FitEllipsoid.createDesignMatrix2(ellipsoid);
+		final RealVector surface2 = FitEllipsoid.solveSurface2(designMatrix2);
+		System.out.println();
+	}
 
 	// region -- Helper classes --
 	public static class Solution {

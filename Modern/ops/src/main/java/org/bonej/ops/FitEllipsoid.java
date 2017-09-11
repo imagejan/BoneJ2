@@ -3,10 +3,7 @@ package org.bonej.ops;
 
 import java.util.Arrays;
 import java.util.Collection;
-import java.util.List;
 import java.util.function.Function;
-import java.util.stream.Collectors;
-import java.util.stream.Stream;
 
 import net.imagej.ops.Contingent;
 import net.imagej.ops.Op;
@@ -16,7 +13,6 @@ import org.apache.commons.math3.geometry.euclidean.threed.Vector3D;
 import org.apache.commons.math3.linear.Array2DRowRealMatrix;
 import org.apache.commons.math3.linear.ArrayRealVector;
 import org.apache.commons.math3.linear.EigenDecomposition;
-import org.apache.commons.math3.linear.MatrixUtils;
 import org.apache.commons.math3.linear.RealMatrix;
 import org.apache.commons.math3.linear.RealVector;
 import org.apache.commons.math3.linear.SingularValueDecomposition;
@@ -24,10 +20,14 @@ import org.apache.commons.math3.util.FastMath;
 import org.scijava.plugin.Plugin;
 
 /**
+ * TODO explanation about least squares distance fitting and why it might not be
+ * an ellipsoid
+ *
  * @author Richard Domander
  */
 // TODO Contact Kaleb for licensing etc.
 // TODO check calculations
+// TODO return Optional<Solution>
 @Plugin(type = Op.class)
 public class FitEllipsoid extends
 	AbstractUnaryFunctionOp<Collection<Vector3D>, FitEllipsoid.Solution>
@@ -99,42 +99,6 @@ public class FitEllipsoid extends
 		return new Array2DRowRealMatrix(data);
 	}
 
-	private static RealMatrix createDesignMatrix2(final Collection<Vector3D> points) {
-		final double[][] data = points.stream().map(p -> {
-			double xx = Math.pow(p.getX(), 2);
-			double yy = Math.pow(p.getY(), 2);
-			double zz = Math.pow(p.getZ(), 2);
-			double xy = 2 * (p.getX() * p.getY());
-			double xz = 2 * (p.getX() * p.getZ());
-			double yz = 2 * (p.getY() * p.getZ());
-			double x = 2 * p.getX();
-			double y = 2 * p.getY();
-			double z = 2 * p.getZ();
-			return new double[]{xx, yy, zz, xy, xz, yz, x, y, z};
-		}).toArray(double[][]::new);
-		return new Array2DRowRealMatrix(data);
-	}
-
-	private static RealVector solveSurface2(RealMatrix d) {
-		// Multiply: d' * d
-		RealMatrix dtd = d.transpose().multiply(d);
-
-		// Create a vector of ones.
-		RealVector ones = new ArrayRealVector(d.getRowDimension());
-		ones.mapAddToSelf(1);
-
-		// Multiply: d' * ones.mapAddToSelf(1)
-		RealVector dtOnes = d.transpose().operate(ones);
-
-		// Find ( d' * d )^-1
-		RealMatrix dtdi = new SingularValueDecomposition(dtd)
-				.getSolver().getInverse();
-
-		// v = (( d' * d )^-1) * ( d' * ones.mapAddToSelf(1));
-
-		return dtdi.operate(dtOnes);
-	}
-
 	private static boolean isEllipsoid(final double[] eigenvalues) {
 		// the signs of the eigenvalues (diagonal elements of DD) determine the
 		// type. If they are all positive, it is an ellipsoid; two positive and
@@ -146,20 +110,22 @@ public class FitEllipsoid extends
 	}
 
 	private static RealVector solveCentre(final RealMatrix quadricSurface) {
-		final RealMatrix subMatrix = quadricSurface.getSubMatrix(0, 2, 0, 2).scalarMultiply(-1.0);
-		final RealMatrix subInverse = MatrixUtils.inverse(subMatrix);
+		final RealMatrix subMatrix = quadricSurface.getSubMatrix(0, 2, 0, 2)
+			.scalarMultiply(-1.0);
+		final RealMatrix subInverse = new SingularValueDecomposition(subMatrix)
+			.getSolver().getInverse();
 		// The {x,y,z} translation (from origin) part of the matrix
-		final RealVector translation = quadricSurface.getRowVector(3).getSubVector(0,
-			3);
+		final RealVector translation = quadricSurface.getRowVector(3).getSubVector(
+			0, 3);
 		return subInverse.operate(translation);
 	}
 
 	private static EigenDecomposition solveEigenvectors(
 		final RealMatrix quadricSurface)
 	{
-		final RealMatrix eigenMatrix = quadricSurface.getSubMatrix(0, 2, 0, 2);
 		final double scalar = -1.0 / quadricSurface.getEntry(3, 3);
-		eigenMatrix.scalarMultiply(scalar);
+		final RealMatrix eigenMatrix = quadricSurface.getSubMatrix(0, 2, 0, 2)
+			.scalarMultiply(scalar);
 		return new EigenDecomposition(eigenMatrix);
 	}
 
@@ -181,7 +147,8 @@ public class FitEllipsoid extends
 		final RealMatrix d = createDesignMatrix(pointCloud);
 		final RealMatrix dT = d.transpose();
 		// Don't use MatrixUtils.inverse - it may throw a SingularMatrixException
-		final RealMatrix dTDInverse = new SingularValueDecomposition(dT.multiply(d)).getSolver().getInverse();
+		final RealMatrix dTDInverse = new SingularValueDecomposition(dT.multiply(d))
+			.getSolver().getInverse();
 		final ArrayRealVector ones = new ArrayRealVector(pointCloud.size(), 1);
 		return dTDInverse.operate(dT.operate(ones));
 	}
@@ -218,6 +185,7 @@ public class FitEllipsoid extends
 	private static double toRadius(final double eigenvalue) {
 		return FastMath.sqrt(1.0 / eigenvalue);
 	}
+	// endregion
 
 	private static RealMatrix translateToCentre(final RealMatrix quadricSurface,
 		final RealVector centre)
@@ -235,29 +203,9 @@ public class FitEllipsoid extends
 		// @formatter:on
 		return t.transpose().multiply(quadricSurface).multiply(t);
 	}
-	// endregion
-
-	public static void main(String... args) {
-		final double a = 1;
-		final double b = 2;
-		final double c = 3;
-		final Vector3D centre = new Vector3D(1, 1, 1);
-		final List<Vector3D> ellipsoid = Stream.of(
-				new Vector3D(0, 0, 0),
-				new Vector3D(1 + a, 1, 1),
-				new Vector3D(1 - a, 1, 1),
-				new Vector3D(1, 1 + b, 1),
-				new Vector3D(1, 1 - b, 1),
-				new Vector3D(1, 1, 1 + c),
-				new Vector3D(1, 1, 1 - c)
-		).map(v -> v.add(centre)).collect(Collectors.toList());
-		final RealVector surface = FitEllipsoid.solveSurface(ellipsoid);
-		final RealMatrix designMatrix2 = FitEllipsoid.createDesignMatrix2(ellipsoid);
-		final RealVector surface2 = FitEllipsoid.solveSurface2(designMatrix2);
-		System.out.println();
-	}
 
 	// region -- Helper classes --
+	// TODO Remove isEllipsoid field
 	public static class Solution {
 
 		private final RealMatrix surface;
@@ -323,13 +271,18 @@ public class FitEllipsoid extends
 		}
 
 		/**
-		 * Get a copy of the ith eigenvector of the ellipsoid surface.
+		 * Get a copy of the eigenvectors of the ellipsoid surface.
 		 *
-		 * @param i Index of the eigenvector.
-		 * @return an eigenvector.
+		 * @return eigenvector array.
 		 */
-		public RealVector getEigenvector(final int i) {
-			return decomposition.getEigenvector(i);
+		public RealVector[] getEigenvectors() {
+			// @formatter:off
+			return new RealVector[] {
+					decomposition.getEigenvector(0),
+					decomposition.getEigenvector(1),
+					decomposition.getEigenvector(2)
+			};
+			// @formatter:on
 		}
 
 		/**
@@ -343,6 +296,9 @@ public class FitEllipsoid extends
 
 		/**
 		 * Check whether the solved quadric surface is an ellipsoid.
+		 * <p>
+		 * NB spheres and spheroids are ellipsoids
+		 * </p>
 		 *
 		 * @return true if the surface is an ellipsoid, false otherwise.
 		 */

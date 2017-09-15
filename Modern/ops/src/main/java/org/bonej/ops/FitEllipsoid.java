@@ -3,6 +3,7 @@ package org.bonej.ops;
 
 import java.util.Arrays;
 import java.util.Collection;
+import java.util.Optional;
 import java.util.function.Function;
 
 import net.imagej.ops.Contingent;
@@ -30,7 +31,7 @@ import org.scijava.plugin.Plugin;
 // TODO return Optional<Solution>
 @Plugin(type = Op.class)
 public class FitEllipsoid extends
-	AbstractUnaryFunctionOp<Collection<Vector3D>, FitEllipsoid.Solution>
+	AbstractUnaryFunctionOp<Collection<Vector3D>, Optional<FitEllipsoid.Solution>>
 	implements Contingent
 {
 
@@ -46,7 +47,7 @@ public class FitEllipsoid extends
 	public static final int SURFACE_TERMS = 9;
 
 	@Override
-	public Solution calculate(final Collection<Vector3D> points) {
+	public Optional<Solution> calculate(final Collection<Vector3D> points) {
 		final RealVector polynomial = solveSurface(points);
 		final RealMatrix surface = toAlgebraicMatrix(polynomial);
 		final RealVector centre = solveCentre(surface);
@@ -56,9 +57,11 @@ public class FitEllipsoid extends
 		final double[] eigenvalues = eigenDecomposition.getRealEigenvalues();
 		final double[] radii = Arrays.stream(eigenvalues).map(
 			FitEllipsoid::toRadius).toArray();
-		final boolean isEllipsoid = isEllipsoid(eigenvalues);
-		return new Solution(surface, centre, eigenDecomposition, radii,
-			isEllipsoid);
+        if (isEllipsoid(eigenvalues)) {
+            return Optional.of(new Solution(surface, centre, eigenDecomposition, radii));
+        } else {
+            return Optional.empty();
+        }
 	}
 
 	@Override
@@ -106,6 +109,7 @@ public class FitEllipsoid extends
 		// negative gives a hyperboloid of two sheets. If one or more eigenvalues
 		// vanish, we have a degenerate case such as a paraboloid,or a cylinder or
 		// even a pair of planes.
+		// TODO should work with tolerance x > EPS? Otherwise eigenvalues don't "vanish"
 		return Arrays.stream(eigenvalues).allMatch(x -> x > 0);
 	}
 
@@ -212,17 +216,14 @@ public class FitEllipsoid extends
 		private final RealVector centre;
 		private final EigenDecomposition decomposition;
 		private final double[] radii;
-		private final boolean isEllipsoid;
 
 		private Solution(final RealMatrix surface, final RealVector centre,
-			final EigenDecomposition decomposition, final double[] radii,
-			final boolean isEllipsoid)
+			final EigenDecomposition decomposition, final double[] radii)
 		{
 			this.surface = surface;
 			this.centre = centre;
 			this.decomposition = decomposition;
 			this.radii = radii;
-			this.isEllipsoid = isEllipsoid;
 		}
 
 		/**
@@ -250,6 +251,15 @@ public class FitEllipsoid extends
 		 */
 		public double getC() {
 			return radii[2];
+		}
+
+		/**
+		 * Gets a copy of the radii of the ellipsoid.
+		 *
+		 * @return an array of radii {a, b, c}
+		 */
+		public double[] getRadii() {
+			return Arrays.copyOf(radii, radii.length);
 		}
 
 		/**
@@ -294,17 +304,6 @@ public class FitEllipsoid extends
 			return surface.copy();
 		}
 
-		/**
-		 * Check whether the solved quadric surface is an ellipsoid.
-		 * <p>
-		 * NB spheres and spheroids are ellipsoids
-		 * </p>
-		 *
-		 * @return true if the surface is an ellipsoid, false otherwise.
-		 */
-		public boolean isEllipsoid() {
-			return isEllipsoid;
-		}
 	}
 	// endregion
 }

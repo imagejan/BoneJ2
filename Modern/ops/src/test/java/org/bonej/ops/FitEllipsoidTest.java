@@ -8,6 +8,7 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
@@ -29,18 +30,26 @@ import org.apache.commons.math3.linear.RealVector;
 import org.apache.commons.math3.random.MersenneTwister;
 import org.apache.commons.math3.random.UnitSphereRandomVectorGenerator;
 import org.bonej.ops.FitEllipsoid.Solution;
+import org.hamcrest.CoreMatchers;
 import org.junit.AfterClass;
 import org.junit.BeforeClass;
+import org.junit.Rule;
 import org.junit.Test;
+import org.junit.rules.ExpectedException;
 import org.scijava.vecmath.Quat4d;
 
 /**
  * Tests for the {@link FitEllipsoid}
- *
+ * <p>
+ * What's missing is a test for random points within an ellipsoid. There the
+ * fitting is too unpredictable to check for expected values with any
+ * meaningful margin of error. The solved surface may not even be an ellipsoid.
+ * There may be an additional constraint that ensures that the generated points
+ * have an ellipsoidal solution, but I don't know of such.
+ * </p>
+ * 
  * @author Richard Domander
  */
-//TODO Licence boiler plate
-//TODO Document problems with testing completely random ellipsoid points
 public class FitEllipsoidTest {
 
 	private static final ImageJ IMAGE_J = new ImageJ();
@@ -50,6 +59,8 @@ public class FitEllipsoidTest {
 		new UnitSphereRandomVectorGenerator(4, new MersenneTwister(SEED));
 	private static final Random random = new Random(SEED);
 	private static UnaryFunctionOp<Collection<Vector3D>, Optional<Solution>> fitter;
+	@Rule
+	public final ExpectedException exception = ExpectedException.none();
 
 	/**
 	 * Tests ellipsoid fitting on an ellipsoidal band of points around certain
@@ -72,7 +83,7 @@ public class FitEllipsoidTest {
 		assertTrue("Fitting should have found an ellipsoid", result.isPresent());
 		final Solution solution = result.get();
 		assertArrayEquals("Ellipsoid centre point is not within tolerance", centre
-			.toArray(), solution.getCentre().toArray(), 0.05);
+			.toArray(), solution.getCenter().toArray(), 0.05);
 		assertEquals("Ellipsoid radius is not within tolerance", a, solution.getA(),
 			0.025);
 		assertEquals("Ellipsoid radius is not within tolerance", b, solution.getB(),
@@ -91,7 +102,6 @@ public class FitEllipsoidTest {
 					p, 0), new Vector3D(p, -p, 0), new Vector3D(-p, -p, 0), new Vector3D(
 						0, p, p), new Vector3D(0, -p, p), new Vector3D(0, p, -p),
 			new Vector3D(0, -p, -p)).collect(toList());
-
 		// @formatter:off
 		final RealVector[] eigenvectors = {
 				new ArrayRealVector(new double[] { 0, 1, 0 }),
@@ -107,7 +117,7 @@ public class FitEllipsoidTest {
 		final Solution solution = result.get();
 		assertSurface(sphere, solution.getSurface());
 		assertArrayEquals("Centre point is incorrect", centreCoords, solution
-			.getCentre().toArray(), DELTA);
+			.getCenter().toArray(), DELTA);
 		assertArrayEquals("Eigenvectors are incorrect", eigenvectors, solution
 			.getEigenvectors());
 		assertArrayEquals("Eigenvalues are incorrect", eigenvalues, solution
@@ -115,6 +125,12 @@ public class FitEllipsoidTest {
 		assertEquals("Radius A is incorrect", 1.0, solution.getA(), DELTA);
 		assertEquals("Radius B is incorrect", 1.0, solution.getB(), DELTA);
 		assertEquals("Radius C is incorrect", 1.0, solution.getC(), DELTA);
+		assertArrayEquals(new double[]{1, 1, 1}, solution.getRadii(), DELTA);
+		// Since radii = 1, eigenvectors are equal to the semiaxes
+		final RealVector[] semiaxes = solution.getSemiaxes();
+		for (int i = 0; i < 3; i++) {
+			assertArrayEquals(eigenvectors[i].toArray(), semiaxes[i].toArray(), DELTA);
+		}
 	}
 
 	@Test
@@ -158,26 +174,33 @@ public class FitEllipsoidTest {
 		assertTrue("Fitting should have found an ellipsoid", result.isPresent());
 		final Solution solution = result.get();
 		assertArrayEquals("Ellipsoid centre point is not within tolerance", centre
-			.toArray(), solution.getCentre().toArray(), 0.05);
+			.toArray(), solution.getCenter().toArray(), 0.05);
 		assertEquals("Ellipsoid radius is not within tolerance", a, solution.getA(),
 			0.025);
 		assertEquals("Ellipsoid radius is not within tolerance", b, solution.getB(),
 			0.025);
 		assertEquals("Ellipsoid radius is not within tolerance", c, solution.getC(),
 			0.025);
+		assertArrayEquals("Radii are not in order", new double[]{a, b, c}, solution.getRadii(), 0.025);
 	}
 
-	// TODO test contingency / op matching
 	@Test
-	public void testTooFewPoints() {}
+	public void testTooFewPoints() {
+		exception.expect(IllegalArgumentException.class);
+		exception.expectMessage(CoreMatchers.containsString(
+			"Inputs do not conform to op rules"));
+		final List<Vector3D> fewPoints = generate(() -> new Vector3D(0, 0, 0))
+			.limit(FitEllipsoid.SURFACE_TERMS - 1).collect(toList());
+		IMAGE_J.op().run(FitEllipsoid.class, fewPoints);
+	}
 
 	@SuppressWarnings("unchecked")
 	@BeforeClass
 	public static void oneTimeSetUp() {
-		final Collection<Vector3D> points = generate(() -> new Vector3D(0, 0, 0))
-			.limit(FitEllipsoid.SURFACE_TERMS).collect(toList());
+		final Collection<Vector3D> mockPoints = generate(() -> new Vector3D(0, 0,
+			0)).limit(FitEllipsoid.SURFACE_TERMS).collect(toList());
 		fitter = (UnaryFunctionOp) Functions.unary(IMAGE_J.op(), FitEllipsoid.class,
-			Optional.class, points);
+			Optional.class, mockPoints);
 	}
 
 	@AfterClass
@@ -214,6 +237,9 @@ public class FitEllipsoidTest {
 	 * Generates random uniformly distributed points on an ellipsoid surface.
 	 * <p>
 	 * NB Radii should be 0 &lt; a &lt; b &lt; c.
+	 * </p>
+	 * <p>
+	 * NB Distribution is not uniform if variance &neq;
 	 * </p>
 	 * <p>
 	 * In essence the method first generates uniformly distributed points on a
@@ -258,7 +284,7 @@ public class FitEllipsoidTest {
 			toEllipsoid).map(scaling).map(v -> v.add(centre)).collect(toList());
 	}
 
-	private boolean isEllipsoidPoint(final Vector3D p, final double a,
+	private static boolean isEllipsoidPoint(final Vector3D p, final double a,
 		final double b, final double c)
 	{
 		final DoubleBinaryOperator f = (x, y) -> (x * x) / (y * y);

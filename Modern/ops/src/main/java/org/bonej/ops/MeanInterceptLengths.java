@@ -36,6 +36,7 @@ import org.scijava.vecmath.Vector3d;
 // TODO Implement for 2D
 // TODO implements Contingent
 // TODO Use RealVector
+// TODO Depend on Apache Commons Math
 @Plugin(type = Op.class)
 public class MeanInterceptLengths<B extends BooleanType<B>> extends
 	AbstractUnaryFunctionOp<RandomAccessibleInterval<B>, Collection<Tuple3d>>

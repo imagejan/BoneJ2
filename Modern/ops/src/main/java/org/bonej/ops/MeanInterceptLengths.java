@@ -55,9 +55,14 @@ public class MeanInterceptLengths<B extends BooleanType<B>> extends
 
 	/** Increment added to the scalar value t used to scale sampling vectors. */
 	@Parameter(required = false)
-	private double tIncrement = 1.0 / 2.3;
+	private Double tIncrement = null;
 
-	/** The unit quaternion used to rotate the sampling grid. */
+	/**
+	 * The unit quaternion used to rotate the sampling grid.
+	 * <p>
+	 * If left null, then a random rotation is used.
+	 * </p>
+	 */
 	@Parameter(type = ItemIO.BOTH, required = false)
 	private double[] rotation = null;
 
@@ -67,19 +72,12 @@ public class MeanInterceptLengths<B extends BooleanType<B>> extends
 	{
 		final long[] bounds = findBounds(interval);
 		final double gridSize = findGridSize(bounds);
-		if (vectors == null) {
-			vectors = Arrays.stream(bounds).max().orElse(0) + 1;
-			vectors *= vectors;
-		}
-		if (rotation == null) {
-			// TODO Test how ItemIO.BOTH works
-			rotation = generator.nextVector();
-		}
+		fillParameters(bounds);
 		final Vector3D centroid = findCentroid(bounds);
 		final SamplingGrid grid = new SamplingGrid(gridSize, rotation, centroid);
 		final Stream<ValuePair<Vector3D, Vector3D>> samplers = grid.getSamplers(
 			vectors);
-		return samplers.map(sampler -> sample(interval, bounds, sampler,
+		return samplers.map(sampler -> sampleMILVector(interval, bounds, sampler,
 			tIncrement)).filter(Objects::nonNull).collect(Collectors.toList());
 	}
 
@@ -96,6 +94,15 @@ public class MeanInterceptLengths<B extends BooleanType<B>> extends
 		final long[] bounds = new long[interval.numDimensions()];
 		interval.dimensions(bounds);
 		return bounds;
+	}
+
+	public static Vector3D findCentroid(final long[] bounds) {
+		return new Vector3D(bounds[0] * 0.5, bounds[1] * 0.5, bounds[2] * 0.5);
+	}
+
+	public static double findGridSize(final long[] bounds) {
+		final long sumSquared = Arrays.stream(bounds).map(i -> i * i).sum();
+		return Math.sqrt(sumSquared);
 	}
 
 	public static ValuePair<Double, Double> findIntervalIntersections(
@@ -135,15 +142,6 @@ public class MeanInterceptLengths<B extends BooleanType<B>> extends
 		return new ValuePair<>(tMin, tMax);
 	}
 
-	public static Vector3D findCentroid(final long[] bounds) {
-		return new Vector3D(bounds[0] * 0.5, bounds[1] * 0.5, bounds[2] * 0.5);
-	}
-
-	public static double findGridSize(final long[] bounds) {
-		final long sumSquared = Arrays.stream(bounds).map(i -> i * i).sum();
-		return Math.sqrt(sumSquared);
-	}
-
 	public static <B extends BooleanType<B>> long getElement(
 		final RandomAccess<B> access, final Vector3D position)
 	{
@@ -179,49 +177,98 @@ public class MeanInterceptLengths<B extends BooleanType<B>> extends
 		return Math.min(a, b);
 	}
 
-	public static <B extends BooleanType<B>> Vector3D sample(
-		final RandomAccessibleInterval<B> interval, final long[] stack,
-		final ValuePair<Vector3D, Vector3D> sampler, final double increment)
+	public static <B extends BooleanType<B>> long sampleIntercepts(
+		final RandomAccessibleInterval<B> interval,
+		final ValuePair<Vector3D, Vector3D> sampler,
+		final ValuePair<Double, Double> intersections, final double increment)
 	{
-		// TODO Refactor to findMILVector(sampler) { intersections = interfaces
-		// ... return milVector;}
-		final ValuePair<Double, Double> tPair = findIntervalIntersections(sampler,
-			stack);
-		if (tPair == null) {
-			return null;
-		}
-		final double jitterT = random.nextDouble() * increment;
-		final double tMin = Math.min(tPair.a, tPair.b);
-		final double tMax = Math.max(tPair.a, tPair.b) - jitterT;
+		final double offset = random.nextDouble() * increment;
+		final double tMin = Math.min(intersections.a, intersections.b);
+		final double tMax = Math.max(intersections.a, intersections.b) - offset;
 		if (tMin > tMax) {
-			// interval fits (at most) one sampling point. no intersections
-			return null;
+			// interval fits (at most) one sampling point. no intercepts
+			return -1;
 		}
 		final Vector3D origin = sampler.a;
 		final Vector3D direction = sampler.b;
-		final Vector3D jitter = direction.scalarMultiply(jitterT);
 		final Vector3D samplingGap = direction.scalarMultiply(increment);
 		final RandomAccess<B> access = interval.randomAccess();
-		Vector3D point = direction.scalarMultiply(tMin).add(origin).add(jitter);
-		long previous = getElement(access, point);
-		long interfaces = 0;
-		for (double t = tMin; t <= tMax; t += increment) {
-			final long current = getElement(access, point);
-			interfaces += current ^ previous;
-			point.add(samplingGap);
-			previous = current;
-		}
-		return toMILVector(direction, tPair, interfaces);
+		final Vector3D point = direction.scalarMultiply(tMin + offset).add(origin);
+		final long iterations = (long) Math.max(0, (tMax - tMin) / increment + 1);
+		return countIntercepts(access, point, samplingGap, iterations);
 	}
 
-	public static Vector3D toMILVector(final Vector3D direction,
-		final ValuePair<Double, Double> tPair, final long intersections)
+	public static <B extends BooleanType<B>> Vector3D sampleMILVector(
+		final RandomAccessibleInterval<B> interval, final long[] stack,
+		final ValuePair<Vector3D, Vector3D> sampler, final double increment)
 	{
-		final double intervalScalar = Math.abs(tPair.a - tPair.b);
-		if (intersections < 2) {
+		final ValuePair<Double, Double> intersections = findIntervalIntersections(
+			sampler, stack);
+		if (intersections == null) {
+			return null;
+		}
+		final long intercepts = sampleIntercepts(interval, sampler, intersections,
+			increment);
+		if (intercepts < 0) {
+			return null;
+		}
+		return toMILVector(sampler.b, intersections, intercepts);
+	}
+
+	/**
+	 * Creates a mean interception length (MIL) vector.
+	 * <p>
+	 * The MIL vector is parallel to the direction of the sampling vector. Its
+	 * length equals the section of the sampling vector withing the stack
+	 * (interval), and its origin is (0, 0, 0).
+	 * </p>
+	 *
+	 * @param direction direction of the sampling vector.
+	 * @param intersections scalar values (t) for stack - sampling vector
+	 *          intersection points.
+	 * @param intercepts number of foreground - background interceptions along
+	 *          sampling vector.
+	 * @return a new MIL vector.
+	 */
+	// TODO rename
+	public static Vector3D toMILVector(final Vector3D direction,
+		final ValuePair<Double, Double> intersections, final long intercepts)
+	{
+		final double intervalScalar = Math.abs(intersections.a - intersections.b);
+		if (intercepts < 2) {
 			return direction.scalarMultiply(intervalScalar);
 		}
-		return direction.scalarMultiply(intervalScalar / intersections);
+		return direction.scalarMultiply(intervalScalar / intercepts);
+	}
+
+	private static <B extends BooleanType<B>> long countIntercepts(
+		final RandomAccess<B> access, final Vector3D start,
+		final Vector3D samplingGap, final long iterations)
+	{
+		long intercepts = 0;
+		long previous = getElement(access, start);
+		Vector3D point = start;
+		for (long i = 0; i < iterations; i++) {
+			final long current = getElement(access, start);
+			intercepts += current ^ previous;
+			point = point.add(samplingGap);
+			previous = current;
+		}
+		return intercepts;
+	}
+
+	private void fillParameters(final long[] bounds) {
+		if (vectors == null) {
+			vectors = Arrays.stream(bounds).min().orElse(0);
+			vectors *= vectors;
+		}
+		if (rotation == null) {
+			// TODO Test how ItemIO.BOTH works
+			rotation = generator.nextVector();
+		}
+		if (tIncrement == null) {
+			tIncrement = 1.0;
+		}
 	}
 
 	// endregion

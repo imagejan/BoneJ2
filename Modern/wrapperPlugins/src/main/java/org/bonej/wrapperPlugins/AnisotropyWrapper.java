@@ -25,6 +25,7 @@ import net.imglib2.type.NativeType;
 import net.imglib2.type.logic.BitType;
 import net.imglib2.type.numeric.RealType;
 
+import org.apache.commons.math3.geometry.euclidean.threed.Vector3D;
 import org.bonej.ops.MeanInterceptLengths;
 import org.bonej.utilities.AxisUtils;
 import org.bonej.utilities.ElementUtil;
@@ -34,9 +35,9 @@ import org.bonej.wrapperPlugins.wrapperUtils.HyperstackUtils.Subspace;
 import org.scijava.app.StatusService;
 import org.scijava.command.Command;
 import org.scijava.command.ContextCommand;
+import org.scijava.log.LogService;
 import org.scijava.plugin.Parameter;
 import org.scijava.plugin.Plugin;
-import org.scijava.vecmath.Vector3d;
 
 /**
  * The wrapper class for calculating the degree of anisotropy using the mean
@@ -65,6 +66,9 @@ public class AnisotropyWrapper<T extends RealType<T> & NativeType<T>> extends
 	@Parameter
 	private OpService opService;
 
+	@Parameter
+	private LogService logService;
+
 	private UnaryFunctionOp<RandomAccessibleInterval<BitType>, Collection> milOp;
 
 	@Override
@@ -81,7 +85,7 @@ public class AnisotropyWrapper<T extends RealType<T> & NativeType<T>> extends
 			statusService.showStatus("Anisotropy: processing subspace " + ordinal);
 			final Subspace<BitType> subspace = subspaces.get(i);
 			final long startTime = System.currentTimeMillis();
-			final Collection<Vector3d> pointCloud = subspaceMILVectors(subspace);
+			final Collection<Vector3D> pointCloud = subspaceMILVectors(subspace);
 			if (pointCloud == null) {
 				statusService.showStatus(-1, -1, "Processing failed for subspace: " +
 					ordinal, true);
@@ -91,7 +95,7 @@ public class AnisotropyWrapper<T extends RealType<T> & NativeType<T>> extends
 		}
 	}
 
-	private List<Future<Collection<Vector3d>>> createFutures(
+	private List<Future<Collection<Vector3D>>> createFutures(
 		final ExecutorService executor, final Subspace<BitType> subspace)
 	{
 		return Stream.generate(() -> milOpCallable(subspace)).map(executor::submit)
@@ -103,22 +107,22 @@ public class AnisotropyWrapper<T extends RealType<T> & NativeType<T>> extends
 			Collection.class, subspace.interval);
 	}
 
-	private Callable<Collection<Vector3d>> milOpCallable(
+	private Callable<Collection<Vector3D>> milOpCallable(
 		final Subspace<BitType> subspace)
 	{
 		return () -> milOp.calculate(subspace.interval);
 	}
 
-	private Collection<Vector3d> subspaceMILVectors(
+	private Collection<Vector3D> subspaceMILVectors(
 		final Subspace<BitType> subspace)
 	{
 		final ExecutorService executor = Executors.newFixedThreadPool(5);
-		final Collection<Vector3d> vectors = new ArrayList<>();
+		final Collection<Vector3D> vectors = new ArrayList<>();
 		try {
-			final List<Future<Collection<Vector3d>>> futures = createFutures(executor,
+			final List<Future<Collection<Vector3D>>> futures = createFutures(executor,
 				subspace);
 			int calculated = 0;
-			for (final Future<Collection<Vector3d>> future : futures) {
+			for (final Future<Collection<Vector3D>> future : futures) {
 				vectors.addAll(future.get());
 				// TODO Fit ellipsoid to point cloud, and stop if error below
 				// tolerance
@@ -127,6 +131,7 @@ public class AnisotropyWrapper<T extends RealType<T> & NativeType<T>> extends
 			}
 		}
 		catch (InterruptedException | ExecutionException e) {
+			logService.debug(e);
 			return null;
 		}
 		finally {

@@ -10,6 +10,8 @@ import java.util.Collection;
 import java.util.Objects;
 import java.util.Random;
 import java.util.stream.Collectors;
+import java.util.stream.IntStream;
+import java.util.stream.LongStream;
 import java.util.stream.Stream;
 
 import net.imagej.ops.Contingent;
@@ -51,7 +53,7 @@ public class MeanInterceptLengths<B extends BooleanType<B>> extends
 
 	/** Number of sampling vectors on each plane. */
 	@Parameter(required = false)
-	private Long vectors = null;
+	private Long nVectors = null;
 
 	/** Increment added to the scalar value t used to scale sampling vectors. */
 	@Parameter(required = false)
@@ -70,15 +72,14 @@ public class MeanInterceptLengths<B extends BooleanType<B>> extends
 	public Collection<Vector3D> calculate(
 		final RandomAccessibleInterval<B> interval)
 	{
-		final long[] bounds = findBounds(interval);
-		final double gridSize = findGridSize(bounds);
-		fillParameters(bounds);
-		final Vector3D centroid = findCentroid(bounds);
-		final SamplingGrid grid = new SamplingGrid(gridSize, rotation, centroid);
-		final Stream<ValuePair<Vector3D, Vector3D>> samplers = grid.getSamplers(
-			vectors);
-		return samplers.map(sampler -> sampleMILVector(interval, bounds, sampler,
-			tIncrement)).filter(Objects::nonNull).collect(Collectors.toList());
+		final long[] dimensions = findDimensions(interval);
+		fillParameters(dimensions);
+		final SamplingGrid grid = new SamplingGrid(interval, rotation);
+		final RandomAccess<B> access = interval.randomAccess();
+		final Stream<SamplingSection> sections = grid.getSamplingSections(nVectors)
+			.filter(SamplingSection::intersectsStack);
+		return sections.map(section -> createMILVector(access, section, tIncrement))
+			.filter(Objects::nonNull).collect(Collectors.toList());
 	}
 
 	// TODO Check RAI dimensionality
@@ -87,59 +88,24 @@ public class MeanInterceptLengths<B extends BooleanType<B>> extends
 		return rotation == null || rotation.length == 4;
 	}
 
+	public static <B extends BooleanType<B>> Vector3D createMILVector(
+		final RandomAccess<B> access, final SamplingSection section,
+		final double increment)
+	{
+		final long intercepts = sampleIntercepts(access, section, increment);
+		if (intercepts < 0) {
+			return null;
+		}
+		return toMILVector(section, intercepts);
+	}
+
 	// region -- Helper methods (public static for unit testing) --
-	public static <C extends NumericType<C>> long[] findBounds(
+	public static <C extends NumericType<C>> long[] findDimensions(
 		final RandomAccessibleInterval<C> interval)
 	{
 		final long[] bounds = new long[interval.numDimensions()];
 		interval.dimensions(bounds);
 		return bounds;
-	}
-
-	public static Vector3D findCentroid(final long[] bounds) {
-		return new Vector3D(bounds[0] * 0.5, bounds[1] * 0.5, bounds[2] * 0.5);
-	}
-
-	public static double findGridSize(final long[] bounds) {
-		final long sumSquared = Arrays.stream(bounds).map(i -> i * i).sum();
-		return Math.sqrt(sumSquared);
-	}
-
-	public static ValuePair<Double, Double> findIntervalIntersections(
-		final ValuePair<Vector3D, Vector3D> sampler, final long[] bounds)
-	{
-		final Vector3D origin = sampler.a;
-		final Vector3D direction = sampler.b;
-		// Subtract epsilon from bounds, so that vectors don't intersect the stack
-		// at w,h or d which would cause an index out of bounds exception
-		final double eps = 1e-12;
-		final double minX = direction.getX() >= 0.0 ? 0 : bounds[0] - eps;
-		final double maxX = direction.getX() >= 0.0 ? bounds[0] - eps : 0;
-		final double minY = direction.getY() >= 0.0 ? 0 : bounds[1] - eps;
-		final double maxY = direction.getY() >= 0.0 ? bounds[1] - eps : 0;
-		final double minZ = direction.getZ() >= 0.0 ? 0 : bounds[2] - eps;
-		final double maxZ = direction.getZ() >= 0.0 ? bounds[2] - eps : 0;
-		final double tX0 = (minX - origin.getX()) / direction.getX();
-		final double tX1 = (maxX - origin.getX()) / direction.getX();
-		final double tY0 = (minY - origin.getY()) / direction.getY();
-		final double tY1 = (maxY - origin.getY()) / direction.getY();
-		final double tZ0 = (minZ - origin.getZ()) / direction.getZ();
-		final double tZ1 = (maxZ - origin.getZ()) / direction.getZ();
-		if (tX0 > tY1 || tY0 > tX1) {
-			return null;
-		}
-		double tMin = maxNan(tX0, tY0);
-		double tMax = minNan(tX1, tY1);
-		if (tMin > tZ1 || tZ0 > tMax) {
-			return null;
-		}
-		tMin = maxNan(tZ0, tMin);
-		tMax = minNan(tZ1, tMax);
-		if (Double.isNaN(tMin) || Double.isNaN(tMax)) {
-			return null;
-		}
-
-		return new ValuePair<>(tMin, tMax);
 	}
 
 	public static <B extends BooleanType<B>> long getElement(
@@ -151,68 +117,28 @@ public class MeanInterceptLengths<B extends BooleanType<B>> extends
 		return (long) access.get().getRealDouble();
 	}
 
-	public static double maxNan(final double a, final double b) {
-		if (Double.isNaN(a) && Double.isNaN(b)) {
-			return Double.NaN;
-		}
-		else if (Double.isNaN(a)) {
-			return b;
-		}
-		else if (Double.isNaN(b)) {
-			return a;
-		}
-		return Math.max(a, b);
-	}
-
-	public static double minNan(final double a, final double b) {
-		if (Double.isNaN(a) && Double.isNaN(b)) {
-			return Double.NaN;
-		}
-		else if (Double.isNaN(a)) {
-			return b;
-		}
-		else if (Double.isNaN(b)) {
-			return a;
-		}
-		return Math.min(a, b);
-	}
-
 	public static <B extends BooleanType<B>> long sampleIntercepts(
-		final RandomAccessibleInterval<B> interval,
-		final ValuePair<Vector3D, Vector3D> sampler,
-		final ValuePair<Double, Double> intersections, final double increment)
+		final RandomAccess<B> access, final SamplingSection section,
+		final double increment)
 	{
 		final double offset = random.nextDouble() * increment;
-		final double tMin = Math.min(intersections.a, intersections.b);
-		final double tMax = Math.max(intersections.a, intersections.b) - offset;
+		final Vector3D samplingGap = section.direction.scalarMultiply(increment);
+		final double tMin = section.tMin;
+		final double tMax = section.tMax - offset;
 		if (tMin > tMax) {
-			// interval fits (at most) one sampling point. no intercepts
 			return -1;
 		}
-		final Vector3D origin = sampler.a;
-		final Vector3D direction = sampler.b;
-		final Vector3D samplingGap = direction.scalarMultiply(increment);
-		final RandomAccess<B> access = interval.randomAccess();
-		final Vector3D point = direction.scalarMultiply(tMin + offset).add(origin);
-		final long iterations = (long) Math.max(0, (tMax - tMin) / increment + 1);
-		return countIntercepts(access, point, samplingGap, iterations);
-	}
-
-	public static <B extends BooleanType<B>> Vector3D sampleMILVector(
-		final RandomAccessibleInterval<B> interval, final long[] stack,
-		final ValuePair<Vector3D, Vector3D> sampler, final double increment)
-	{
-		final ValuePair<Double, Double> intersections = findIntervalIntersections(
-			sampler, stack);
-		if (intersections == null) {
-			return null;
+		Vector3D point = section.direction.scalarMultiply(tMin + offset).add(
+			section.origin);
+		long intercepts = 0;
+		long previous = getElement(access, point);
+		for (double t = tMin; t <= tMax; t += increment) {
+			final long current = getElement(access, point);
+			intercepts += current ^ previous;
+			point = point.add(samplingGap);
+			previous = current;
 		}
-		final long intercepts = sampleIntercepts(interval, sampler, intersections,
-			increment);
-		if (intercepts < 0) {
-			return null;
-		}
-		return toMILVector(sampler.b, intersections, intercepts);
+		return intercepts;
 	}
 
 	/**
@@ -223,44 +149,25 @@ public class MeanInterceptLengths<B extends BooleanType<B>> extends
 	 * (interval), and its origin is (0, 0, 0).
 	 * </p>
 	 *
-	 * @param direction direction of the sampling vector.
-	 * @param intersections scalar values (t) for stack - sampling vector
-	 *          intersection points.
+	 * @param section
 	 * @param intercepts number of foreground - background interceptions along
 	 *          sampling vector.
 	 * @return a new MIL vector.
 	 */
-	// TODO rename
-	public static Vector3D toMILVector(final Vector3D direction,
-		final ValuePair<Double, Double> intersections, final long intercepts)
+	public static Vector3D toMILVector(final SamplingSection section,
+		final long intercepts)
 	{
-		final double intervalScalar = Math.abs(intersections.a - intersections.b);
+		final Vector3D v = section.direction.scalarMultiply(section.length);
 		if (intercepts < 2) {
-			return direction.scalarMultiply(intervalScalar);
+			return v;
 		}
-		return direction.scalarMultiply(intervalScalar / intercepts);
-	}
-
-	private static <B extends BooleanType<B>> long countIntercepts(
-		final RandomAccess<B> access, final Vector3D start,
-		final Vector3D samplingGap, final long iterations)
-	{
-		long intercepts = 0;
-		long previous = getElement(access, start);
-		Vector3D point = start;
-		for (long i = 0; i < iterations; i++) {
-			final long current = getElement(access, start);
-			intercepts += current ^ previous;
-			point = point.add(samplingGap);
-			previous = current;
-		}
-		return intercepts;
+		return v.scalarMultiply(1.0 / intercepts);
 	}
 
 	private void fillParameters(final long[] bounds) {
-		if (vectors == null) {
-			vectors = Arrays.stream(bounds).min().orElse(0);
-			vectors *= vectors;
+		if (nVectors == null) {
+			final long n = Arrays.stream(bounds).max().orElse(0);
+			nVectors = n * n;
 		}
 		if (rotation == null) {
 			// TODO Test how ItemIO.BOTH works
@@ -275,29 +182,146 @@ public class MeanInterceptLengths<B extends BooleanType<B>> extends
 
 	// region -- Helper classes --
 
+	public static final class SamplingSection {
+
+		private Vector3D origin;
+		private Vector3D direction;
+		private double tMin;
+		private double tMax;
+		private boolean intersects;
+		private double length;
+
+		public SamplingSection(final Vector3D origin, final Vector3D direction,
+			final RandomAccessibleInterval<?> interval)
+		{
+			this.origin = new Vector3D(1.0, origin);
+			this.direction = new Vector3D(1.0, direction);
+			final long[] min = new long[3];
+			final long[] max = new long[3];
+			interval.min(min);
+			interval.max(max);
+			findIntervalIntersections(this.origin, this.direction, min, max);
+			length = new Vector3D(tMax, direction).subtract(tMin, direction)
+				.getNorm();
+		}
+
+		public boolean intersectsStack() {
+			return intersects;
+		}
+
+		private void findIntervalIntersections(final Vector3D origin,
+			final Vector3D direction, final long[] min, final long[] max)
+		{
+			intersects = false;
+			// Because max = {w - 1, h - 1, d - 1} we need to add eps to the bounds to
+			// get the correct intersection point. However, it can't equal 1, because
+			// otherwise vector coordinates will floor to w, h or d, which will cause
+			// an index out of bounds exception.
+			final double eps = 1 - 1e-12;
+			final double minX = direction.getX() >= 0.0 ? min[0] : max[0] + eps;
+			final double maxX = direction.getX() >= 0.0 ? max[0] + eps : min[0];
+			final double minY = direction.getY() >= 0.0 ? min[1] : max[1] + eps;
+			final double maxY = direction.getY() >= 0.0 ? max[1] + eps : min[1];
+			final double minZ = direction.getZ() >= 0.0 ? min[2] : max[2] + eps;
+			final double maxZ = direction.getZ() >= 0.0 ? max[2] + eps : min[2];
+			final double tX0 = (minX - origin.getX()) / direction.getX();
+			final double tX1 = (maxX - origin.getX()) / direction.getX();
+			final double tY0 = (minY - origin.getY()) / direction.getY();
+			final double tY1 = (maxY - origin.getY()) / direction.getY();
+			final double tZ0 = (minZ - origin.getZ()) / direction.getZ();
+			final double tZ1 = (maxZ - origin.getZ()) / direction.getZ();
+			if (tX0 > tY1 || tY0 > tX1) {
+				return;
+			}
+			tMin = maxNan(tX0, tY0);
+			tMax = minNan(tX1, tY1);
+			if (tMin > tZ1 || tZ0 > tMax) {
+				return;
+			}
+			tMin = maxNan(tZ0, tMin);
+			tMax = minNan(tZ1, tMax);
+			if (Double.isNaN(tMin) || Double.isNaN(tMax)) {
+				return;
+			}
+			if (tMin > tMax) {
+				final double tmp = tMin;
+				tMin = tMax;
+				tMax = tmp;
+			}
+			intersects = true;
+		}
+
+		private static double maxNan(final double a, final double b) {
+			if (Double.isNaN(a) && Double.isNaN(b)) {
+				return Double.NaN;
+			}
+			else if (Double.isNaN(a)) {
+				return b;
+			}
+			else if (Double.isNaN(b)) {
+				return a;
+			}
+			return Math.max(a, b);
+		}
+
+		private static double minNan(final double a, final double b) {
+			if (Double.isNaN(a) && Double.isNaN(b)) {
+				return Double.NaN;
+			}
+			else if (Double.isNaN(a)) {
+				return b;
+			}
+			else if (Double.isNaN(b)) {
+				return a;
+			}
+			return Math.min(a, b);
+		}
+	}
+
 	public static final class SamplingGrid {
 
 		private final SamplingPlane xy;
 		private final SamplingPlane xz;
 		private final SamplingPlane yz;
+		private final RandomAccessibleInterval<?> interval;
 
-		public SamplingGrid(final double gridSize, final double[] quaternion,
-			final Vector3D centroid)
+		public SamplingGrid(final RandomAccessibleInterval<?> interval,
+			final double[] quaternion)
 		{
+			this.interval = interval;
+			final double gridSize = findGridSize(interval);
+			final Vector3D centroid = findCentroid(interval);
 			xy = new SamplingPlane(gridSize, XY, quaternion, centroid);
 			xz = new SamplingPlane(gridSize, XZ, quaternion, centroid);
 			yz = new SamplingPlane(gridSize, YZ, quaternion, centroid);
 		}
 
-		public Stream<ValuePair<Vector3D, Vector3D>> getSamplers(final long n) {
+		private static Vector3D findCentroid(
+			final RandomAccessibleInterval<?> interval)
+		{
+			final double[] coordinates = IntStream.range(0, 3).mapToDouble(
+				i -> (interval.max(i) + interval.min(i)) * 0.5).toArray();
+			return new Vector3D(coordinates);
+		}
+
+		private static double findGridSize(
+			final RandomAccessibleInterval<?> interval)
+		{
+			final long squaredSum = LongStream.of(interval.dimension(0), interval
+				.dimension(1), interval.dimension(2)).map(d -> d * d).sum();
+			return Math.sqrt(squaredSum);
+		}
+
+		private Stream<SamplingSection> getSamplingSections(final long n) {
 			final Stream.Builder<ValuePair<Vector3D, Vector3D>> builder = Stream
 				.builder();
 			for (long i = 0; i < n; i++) {
-				builder.accept(xy.getSampler());
-				builder.accept(xz.getSampler());
-				builder.accept(yz.getSampler());
+				builder.accept(xy.getSamplingVector());
+				builder.accept(xz.getSamplingVector());
+				builder.accept(yz.getSamplingVector());
 			}
-			return builder.build();
+			return builder.build().map(sampler -> new SamplingSection(sampler.a,
+				sampler.b, interval));
 		}
 	}
 
@@ -345,7 +369,7 @@ public class MeanInterceptLengths<B extends BooleanType<B>> extends
 			}
 		}
 
-		private ValuePair<Vector3D, Vector3D> getSampler() {
+		private ValuePair<Vector3D, Vector3D> getSamplingVector() {
 			final double uScale = random.nextDouble();
 			final double vScale = random.nextDouble();
 			final double x = uScale * u.getX() + vScale * v.getX();
@@ -363,7 +387,8 @@ public class MeanInterceptLengths<B extends BooleanType<B>> extends
 		}
 
 		private void rotateVectors(final double[] quaternion) {
-			final Quaternion q = new Quaternion(quaternion);
+			final Quaternion q = new Quaternion(quaternion[3], quaternion[0],
+				quaternion[1], quaternion[2]);
 			translation = rotate(translation, q);
 			u = rotate(u, q);
 			v = rotate(v, q);
